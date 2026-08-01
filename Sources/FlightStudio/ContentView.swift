@@ -158,12 +158,13 @@ struct ClipListView: View {
                             }
                         } header: {
                             HStack {
-                                Text(Self.dayFormatter.string(from: section.day))
+                                Eyebrow(Self.dayFormatter.string(from: section.day))
                                 Spacer()
-                                Text("\(section.clips.count) clip\(section.clips.count == 1 ? "" : "s")")
-                                    .foregroundStyle(.secondary)
+                                Text("\(section.clips.count)")
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.tertiary)
                             }
-                            .font(.caption.bold())
+                            .padding(.vertical, 2)
                         }
                     }
                 } else {
@@ -204,9 +205,6 @@ struct ClipRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Toggle("", isOn: $clip.ticked)
-                .labelsHidden()
-                .toggleStyle(.checkbox)
             Group {
                 if let thumb = clip.thumbnail {
                     Image(nsImage: thumb)
@@ -217,30 +215,39 @@ struct ClipRow: View {
                         .overlay(ProgressView().controlSize(.small))
                 }
             }
-            .frame(width: 86, height: 50)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(clip.name).font(.headline.monospacedDigit())
-                if clip.relativeName.contains("/") {
-                    Text(clip.relativeName.split(separator: "/").dropLast().joined(separator: "/"))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
+            .frame(width: 92, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.separator.opacity(0.5)))
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(clip.name)
+                        .font(.callout.weight(.medium).monospacedDigit())
+                    if !clip.edit.isDefault {
+                        Image(systemName: "scissors")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.orange)
+                            .help("Has edits")
+                    }
                 }
                 if let info = clip.info {
-                    Text("\(format(seconds: info.duration))  ·  \(info.width)×\(info.height) \(Int(info.fps.rounded()))fps  ·  \(byteString(info.fileSize))")
-                        .font(.caption)
+                    Text("\(format(seconds: info.duration)) · \(info.width)×\(info.height) \(Int(info.fps.rounded()))")
+                        .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
-                    if !clip.edit.isDefault {
-                        Label("edited", systemImage: "scissors")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
+                    Text(clip.relativeName.contains("/")
+                         ? "\(byteString(info.fileSize)) · \(clip.relativeName.split(separator: "/").dropLast().joined(separator: "/"))"
+                         : byteString(info.fileSize))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
                 } else {
                     Text("Reading…").font(.caption).foregroundStyle(.tertiary)
                 }
             }
-            Spacer()
+            Spacer(minLength: 4)
+            Toggle("", isOn: $clip.ticked)
+                .labelsHidden()
+                .toggleStyle(.checkbox)
         }
         .padding(.vertical, 3)
     }

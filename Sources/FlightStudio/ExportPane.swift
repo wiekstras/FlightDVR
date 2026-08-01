@@ -8,99 +8,119 @@ struct ExportPane: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Export").font(.title3.bold())
-
-                Picker("Preset", selection: $settings.preset) {
-                    ForEach(Preset.allCases) { p in Text(p.rawValue).tag(p) }
-                }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
-
-                Text(settings.preset.blurb)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                switch settings.preset {
-                case .edit:
-                    Picker("Codec", selection: $settings.proResProfile) {
-                        ForEach(ProResProfile.allCases) { p in Text(p.rawValue).tag(p) }
+            VStack(alignment: .leading, spacing: 12) {
+                section("Preset") {
+                    Picker("", selection: $settings.preset) {
+                        ForEach(Preset.allCases) { p in Text(p.rawValue).tag(p) }
                     }
-                case .master:
-                    Picker("Quality", selection: $settings.masterQuality) {
-                        ForEach(MasterQuality.allCases) { q in
-                            Text("\(q.rawValue)  (CRF \(q.crf))").tag(q)
-                        }
-                    }
-                    if hardwareAvailable == true {
-                        Toggle("Hardware encoder (Apple VideoToolbox)", isOn: $settings.useHardware)
-                    }
-                case .social:
-                    HStack {
-                        Text("Target size")
-                        Slider(value: $settings.socialTargetMB, in: 5...200, step: 5)
-                        Text("\(Int(settings.socialTargetMB)) MB")
-                            .monospacedDigit()
-                            .frame(width: 55, alignment: .trailing)
-                    }
-                case .remux:
-                    Text("Trim cuts land on keyframes; edits, music and speed ramps are ignored.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-
-                if settings.preset != .remux {
-                    Picker("Colour", selection: $settings.colorMode) {
-                        ForEach(ColorMode.allCases) { m in Text(m.rawValue).tag(m) }
-                    }
-                }
-                Toggle("Keep the audio track", isOn: $settings.keepAudio)
-
-                HStack {
-                    Button("Output folder…") {
-                        let panel = NSOpenPanel()
-                        panel.canChooseDirectories = true
-                        panel.canChooseFiles = false
-                        if panel.runModal() == .OK { settings.outputFolder = panel.url }
-                    }
-                    Text(settings.outputFolder?.lastPathComponent ?? "Movies/Flight Studio")
+                    .pickerStyle(.radioGroup)
+                    .labelsHidden()
+                    Text(settings.preset.blurb)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Divider()
 
-                HStack {
-                    Button("Add ticked to queue") {
-                        queue.enqueue(clips: store.tickedClips, settings: settings)
+                section("Options") {
+                    switch settings.preset {
+                    case .edit:
+                        Picker("Codec", selection: $settings.proResProfile) {
+                            ForEach(ProResProfile.allCases) { p in Text(p.rawValue).tag(p) }
+                        }
+                    case .master:
+                        Picker("Quality", selection: $settings.masterQuality) {
+                            ForEach(MasterQuality.allCases) { q in
+                                Text("\(q.rawValue)  ·  CRF \(q.crf)").tag(q)
+                            }
+                        }
+                        if hardwareAvailable == true {
+                            Toggle("Hardware encoder (VideoToolbox)", isOn: $settings.useHardware)
+                        }
+                    case .social:
+                        HStack {
+                            Slider(value: $settings.socialTargetMB, in: 5...200, step: 5)
+                            Text("\(Int(settings.socialTargetMB)) MB")
+                                .font(.callout.monospacedDigit())
+                                .frame(width: 52, alignment: .trailing)
+                        }
+                    case .remux:
+                        Text("Trim cuts land on keyframes; edits, music and speed ramps are ignored.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .disabled(store.tickedClips.isEmpty)
-                    Button("Add current") {
-                        if let clip = store.selectedClip {
-                            queue.enqueue(clips: [clip], settings: settings)
+                    if settings.preset != .remux {
+                        Picker("Colour", selection: $settings.colorMode) {
+                            ForEach(ColorMode.allCases) { m in Text(m.rawValue).tag(m) }
                         }
                     }
-                    .disabled(store.selectedClip == nil)
+                    Toggle("Keep the audio track", isOn: $settings.keepAudio)
+                }
+                .controlSize(.small)
+
+                Divider()
+
+                section("Output") {
+                    HStack {
+                        Text(settings.outputFolder?.lastPathComponent ?? "Movies/Flight Studio")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer()
+                        Button("Change…") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseDirectories = true
+                            panel.canChooseFiles = false
+                            if panel.runModal() == .OK { settings.outputFolder = panel.url }
+                        }
+                        .controlSize(.small)
+                    }
+                    HStack(spacing: 6) {
+                        Button("Add ticked") {
+                            queue.enqueue(clips: store.tickedClips, settings: settings)
+                        }
+                        .disabled(store.tickedClips.isEmpty)
+                        Button("Add current") {
+                            if let clip = store.selectedClip {
+                                queue.enqueue(clips: [clip], settings: settings)
+                            }
+                        }
+                        .disabled(store.selectedClip == nil)
+                    }
+                    .controlSize(.small)
                 }
 
-                QueueList()
+                Divider()
 
-                HStack {
-                    Button(queue.isRunning ? "Exporting…" : "Start export") {
-                        queue.start()
+                section(queue.jobs.isEmpty ? "Queue" : "Queue · \(queue.jobs.count)") {
+                    QueueList()
+                    HStack {
+                        Button(queue.isRunning ? "Exporting…" : "Start export") {
+                            queue.start()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(queue.isRunning || queue.jobs.allSatisfy { $0.state != .waiting })
+                        Button("Clear finished") { queue.clearFinished() }
+                            .controlSize(.small)
+                            .disabled(queue.jobs.isEmpty)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(queue.isRunning || queue.jobs.allSatisfy { $0.state != .waiting })
-                    Button("Clear finished") { queue.clearFinished() }
-                        .disabled(queue.jobs.isEmpty)
                 }
             }
             .padding(14)
         }
         .task {
             hardwareAvailable = await Task.detached { HardwareDetect.videoToolboxWorks() }.value
+        }
+    }
+
+    @ViewBuilder
+    private func section(_ label: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Eyebrow(label)
+            content()
         }
     }
 }
@@ -114,7 +134,7 @@ struct QueueList: View {
                 QueueRow(job: job)
             }
             if queue.jobs.isEmpty {
-                Text("Queue is empty.")
+                Text("Tick clips, then add them here.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -171,8 +191,8 @@ struct QueueRow: View {
                     .lineLimit(3)
             }
         }
-        .padding(6)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+        .padding(.vertical, 5)
+        .overlay(alignment: .bottom) { Divider().opacity(0.5) }
     }
 
     @ViewBuilder private var stateIcon: some View {

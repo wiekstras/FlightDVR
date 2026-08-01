@@ -223,32 +223,40 @@ struct PlayerPane: View {
                 }
             }
             .background(Color.black)
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 Button {
                     player.togglePlay()
                 } label: {
                     Image(systemName: "playpause.fill")
+                        .font(.system(size: 13))
                 }
+                .buttonStyle(.borderless)
                 .keyboardShortcut(.space, modifiers: [])
-                Text("\(timecode(player.currentTime))  /  \(timecode(player.duration))")
-                    .font(.body.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                Text(timecode(player.currentTime))
+                    .font(.system(size: 13, weight: .medium).monospacedDigit())
+                Text("/ \(timecode(player.duration))")
+                    .font(.system(size: 13).monospacedDigit())
+                    .foregroundStyle(.tertiary)
                 Spacer()
                 if let clip = store.selectedClip, !clip.edit.isDefault, let info = clip.info {
+                    HStack(spacing: 4) {
+                        Eyebrow("Out")
+                        Text(timecode(clip.edit.outputDuration(duration: info.duration)))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
                     Toggle(isOn: Binding(
                         get: { player.previewingEdit },
                         set: { player.setEditPreview($0) }
                     )) {
-                        Label("Preview edit", systemImage: "wand.and.stars")
+                        Text("Preview edit")
                     }
-                    .toggleStyle(.button)
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
                     .help("Play the clip with cuts, speed ramps and music applied")
-                    Text("Output: \(timecode(clip.edit.outputDuration(duration: info.duration)))")
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.orange)
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 8)
         }
     }

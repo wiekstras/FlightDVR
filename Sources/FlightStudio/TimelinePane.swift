@@ -29,171 +29,176 @@ private struct TimelineEditor: View {
     var duration: Double { clip.info?.duration ?? player.duration }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 0) {
             TimelineBar(clip: clip, player: player, duration: duration,
                         pendingCutStart: pendingCutStart, pendingSpeedStart: pendingSpeedStart)
-                .frame(height: 56)
-
-            HStack(spacing: 18) {
-                // Trim
-                GroupBox("Trim") {
-                    HStack {
-                        Button("Set In") { clip.edit.inPoint = player.currentSourceTime }
-                        Button("Set Out") { clip.edit.outPoint = player.currentSourceTime }
-                        Button("Reset") { clip.edit = EditPlan() }
-                    }
-                    .controlSize(.small)
-                }
-
-                // Cut out a middle section
-                GroupBox("Cut out") {
-                    HStack {
-                        if let start = pendingCutStart {
-                            Button("End cut at playhead") {
-                                let end = player.currentSourceTime
-                                if end > start + 0.05 {
-                                    clip.edit.cuts.append(CutRange(start: start, end: end))
-                                }
-                                pendingCutStart = nil
-                            }
-                            .tint(.red)
-                            Button("Cancel") { pendingCutStart = nil }
-                        } else {
-                            Button("Start cut at playhead") { pendingCutStart = player.currentSourceTime }
-                        }
-                    }
-                    .controlSize(.small)
-                }
-
-                // Speed ramp zone
-                GroupBox("Speed ramp") {
-                    HStack {
-                        if let start = pendingSpeedStart {
-                            Picker("", selection: $newZoneSpeed) {
-                                Text("0.25×").tag(0.25)
-                                Text("0.5×").tag(0.5)
-                                Text("1.5×").tag(1.5)
-                                Text("2×").tag(2.0)
-                                Text("3×").tag(3.0)
-                                Text("4×").tag(4.0)
-                            }
-                            .labelsHidden()
-                            .frame(width: 70)
-                            Button("End zone at playhead") {
-                                let end = player.currentSourceTime
-                                if end > start + 0.2 {
-                                    clip.edit.speedZones.append(
-                                        SpeedZone(start: start, end: end, speed: newZoneSpeed))
-                                }
-                                pendingSpeedStart = nil
-                            }
-                            .tint(.orange)
-                            Button("Cancel") { pendingSpeedStart = nil }
-                        } else {
-                            Button("Start zone at playhead") { pendingSpeedStart = player.currentSourceTime }
-                        }
-                    }
-                    .controlSize(.small)
-                }
-
-                MusicBox(clip: clip)
-                Spacer()
-            }
+                .frame(height: 74)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
 
             if !clip.edit.cuts.isEmpty || !clip.edit.speedZones.isEmpty {
-                EditListRow(clip: clip)
+                EditChips(clip: clip)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
             }
+
+            Divider()
+                .padding(.top, 10)
+
+            // The bench: one flat row of tools, grouped by tracked labels.
+            HStack(alignment: .top, spacing: 0) {
+                tool("Trim") {
+                    Button("In") { clip.edit.inPoint = player.currentSourceTime }
+                    Button("Out") { clip.edit.outPoint = player.currentSourceTime }
+                    Button("Reset") { clip.edit = EditPlan() }
+                }
+                benchDivider
+                tool("Cut") {
+                    if let start = pendingCutStart {
+                        Button("End cut") {
+                            let end = player.currentSourceTime
+                            if end > start + 0.05 {
+                                clip.edit.cuts.append(CutRange(start: start, end: end))
+                            }
+                            pendingCutStart = nil
+                        }
+                        .tint(.red)
+                        Button("Cancel") { pendingCutStart = nil }
+                    } else {
+                        Button("Start cut") { pendingCutStart = player.currentSourceTime }
+                    }
+                }
+                benchDivider
+                tool("Speed") {
+                    if let start = pendingSpeedStart {
+                        Picker("", selection: $newZoneSpeed) {
+                            Text("0.25×").tag(0.25)
+                            Text("0.5×").tag(0.5)
+                            Text("1.5×").tag(1.5)
+                            Text("2×").tag(2.0)
+                            Text("3×").tag(3.0)
+                            Text("4×").tag(4.0)
+                        }
+                        .labelsHidden()
+                        .frame(width: 68)
+                        Button("End zone") {
+                            let end = player.currentSourceTime
+                            if end > start + 0.2 {
+                                clip.edit.speedZones.append(
+                                    SpeedZone(start: start, end: end, speed: newZoneSpeed))
+                            }
+                            pendingSpeedStart = nil
+                        }
+                        .tint(.orange)
+                        Button("Cancel") { pendingSpeedStart = nil }
+                    } else {
+                        Button("Start zone") { pendingSpeedStart = player.currentSourceTime }
+                    }
+                }
+                benchDivider
+                tool("Music") {
+                    MusicControls(clip: clip)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
         }
-        .padding(12)
         .onChange(of: clip.edit) { _, _ in
-            // Live edit preview follows every change.
             player.editChanged()
         }
     }
-}
 
-private struct MusicBox: View {
-    @ObservedObject var clip: Clip
+    private var benchDivider: some View {
+        Divider().frame(height: 40).padding(.horizontal, 14)
+    }
 
-    var body: some View {
-        GroupBox("Music") {
-            HStack {
-                if let music = clip.edit.music {
-                    Text(music.url.lastPathComponent)
-                        .lineLimit(1)
-                        .frame(maxWidth: 140)
-                    Slider(value: Binding(
-                        get: { clip.edit.music?.volume ?? 0.8 },
-                        set: { clip.edit.music?.volume = $0 }
-                    ), in: 0...1)
-                    .frame(width: 80)
-                    Toggle("Mute clip audio", isOn: Binding(
-                        get: { clip.edit.music?.muteOriginal ?? true },
-                        set: { clip.edit.music?.muteOriginal = $0 }
-                    ))
-                    Button {
-                        clip.edit.music = nil
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Button("Add music…") {
-                        let panel = NSOpenPanel()
-                        panel.allowedContentTypes = [.audio]
-                        if panel.runModal() == .OK, let url = panel.url {
-                            clip.edit.music = MusicTrack(url: url)
-                        }
-                    }
-                }
-            }
-            .controlSize(.small)
+    @ViewBuilder
+    private func tool(_ label: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Eyebrow(label)
+            HStack(spacing: 6) { content() }
+                .benchButton()
         }
     }
 }
 
-private struct EditListRow: View {
+private struct MusicControls: View {
+    @ObservedObject var clip: Clip
+
+    var body: some View {
+        if let music = clip.edit.music {
+            Text(music.url.deletingPathExtension().lastPathComponent)
+                .font(.caption)
+                .lineLimit(1)
+                .frame(maxWidth: 120)
+            Slider(value: Binding(
+                get: { clip.edit.music?.volume ?? 0.8 },
+                set: { clip.edit.music?.volume = $0 }
+            ), in: 0...1)
+            .frame(width: 76)
+            Toggle("Mute clip", isOn: Binding(
+                get: { clip.edit.music?.muteOriginal ?? true },
+                set: { clip.edit.music?.muteOriginal = $0 }
+            ))
+            .font(.caption)
+            Button {
+                clip.edit.music = nil
+            } label: {
+                Image(systemName: "xmark")
+            }
+        } else {
+            Button("Add music…") {
+                let panel = NSOpenPanel()
+                panel.allowedContentTypes = [.audio]
+                if panel.runModal() == .OK, let url = panel.url {
+                    clip.edit.music = MusicTrack(url: url)
+                }
+            }
+        }
+    }
+}
+
+private struct EditChips: View {
     @ObservedObject var clip: Clip
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ForEach(clip.edit.cuts) { cut in
-                    HStack(spacing: 4) {
-                        Image(systemName: "scissors").font(.caption2)
-                        Text("\(timecode(cut.start))–\(timecode(cut.end))")
-                            .font(.caption.monospacedDigit())
-                        Button {
-                            clip.edit.cuts.removeAll { $0.id == cut.id }
-                        } label: {
-                            Image(systemName: "xmark").font(.caption2)
-                        }
-                        .buttonStyle(.plain)
+                    chip(icon: "scissors", color: .red,
+                         text: "\(timecode(cut.start))–\(timecode(cut.end))") {
+                        clip.edit.cuts.removeAll { $0.id == cut.id }
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.red.opacity(0.15), in: Capsule())
                 }
                 ForEach(clip.edit.speedZones) { zone in
-                    HStack(spacing: 4) {
-                        Image(systemName: "hare").font(.caption2)
-                        Text("\(zone.speed, specifier: "%g")× \(timecode(zone.start))–\(timecode(zone.end))")
-                            .font(.caption.monospacedDigit())
-                        Button {
-                            clip.edit.speedZones.removeAll { $0.id == zone.id }
-                        } label: {
-                            Image(systemName: "xmark").font(.caption2)
-                        }
-                        .buttonStyle(.plain)
+                    chip(icon: "hare", color: .orange,
+                         text: "\(zone.speed.formatted())× \(timecode(zone.start))–\(timecode(zone.end))") {
+                        clip.edit.speedZones.removeAll { $0.id == zone.id }
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.orange.opacity(0.15), in: Capsule())
                 }
             }
         }
     }
+
+    private func chip(icon: String, color: Color, text: String,
+                      remove: @escaping () -> Void) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon).font(.system(size: 9)).foregroundStyle(color)
+            Text(text).font(.caption2.monospacedDigit())
+            Button(action: remove) {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .overlay(Capsule().strokeBorder(.separator))
+    }
 }
 
-// MARK: - The timeline bar itself
+// MARK: - The timeline instrument
 
 private struct TimelineBar: View {
     @ObservedObject var clip: Clip
@@ -202,76 +207,133 @@ private struct TimelineBar: View {
     var pendingCutStart: Double?
     var pendingSpeedStart: Double?
 
+    private let rulerHeight: CGFloat = 16
+    private let handleHeight: CGFloat = 12
+
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
+            let trackHeight = geo.size.height - rulerHeight - handleHeight
             let x = { (t: Double) -> CGFloat in
                 duration > 0 ? CGFloat(t / duration) * w : 0
             }
-            ZStack(alignment: .leading) {
-                // Base track
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(nsColor: .quaternaryLabelColor))
 
-                // Kept region between in/out
-                let inX = x(clip.edit.inPoint)
-                let outX = x(clip.edit.effectiveOut(duration: duration))
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(.blue.opacity(0.35))
-                    .frame(width: max(outX - inX, 0))
-                    .offset(x: inX)
+            VStack(spacing: 0) {
+                Ruler(duration: duration)
+                    .frame(height: rulerHeight)
 
-                // Cuts
-                ForEach(clip.edit.cuts) { cut in
+                // The track: seekable, with the edit painted onto it.
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4).fill(TL.track)
+
+                    let inX = x(clip.edit.inPoint)
+                    let outX = x(clip.edit.effectiveOut(duration: duration))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(TL.kept)
+                        .frame(width: max(outX - inX, 0))
+                        .offset(x: inX)
+
+                    ForEach(clip.edit.cuts) { cut in
+                        Rectangle()
+                            .fill(TL.cut)
+                            .frame(width: max(x(cut.end) - x(cut.start), 2))
+                            .offset(x: x(cut.start))
+                    }
+                    ForEach(clip.edit.speedZones) { zone in
+                        ZStack {
+                            Rectangle().fill(TL.speed)
+                            Text("\(zone.speed.formatted())×")
+                                .font(.system(size: 9, weight: .bold).monospacedDigit())
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: max(x(zone.end) - x(zone.start), 2))
+                        .offset(x: x(zone.start))
+                    }
+
+                    if let p = pendingCutStart { pendingMark(at: x(p), .red) }
+                    if let p = pendingSpeedStart { pendingMark(at: x(p), .orange) }
+
+                    // Playhead
                     Rectangle()
-                        .fill(.red.opacity(0.55))
-                        .frame(width: max(x(cut.end) - x(cut.start), 2))
-                        .offset(x: x(cut.start))
+                        .fill(.primary)
+                        .frame(width: 1.5)
+                        .offset(x: x(player.currentSourceTime) - 0.75)
                 }
+                .frame(height: trackHeight)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            guard duration > 0, w > 0 else { return }
+                            let t = Double(min(max(value.location.x / w, 0), 1)) * duration
+                            player.seekSource(to: t)
+                        }
+                )
 
-                // Speed zones
-                ForEach(clip.edit.speedZones) { zone in
-                    ZStack {
-                        Rectangle().fill(.orange.opacity(0.45))
-                        Text("\(zone.speed, specifier: "%g")×")
-                            .font(.caption2.bold())
-                            .foregroundStyle(.white)
+                // Handle strip: draggable in/out, kept out of the seek gesture's way.
+                ZStack(alignment: .leading) {
+                    handle(at: x(clip.edit.inPoint), width: w) { t in
+                        clip.edit.inPoint = min(t, clip.edit.effectiveOut(duration: duration) - 0.2)
                     }
-                    .frame(width: max(x(zone.end) - x(zone.start), 2))
-                    .offset(x: x(zone.start))
+                    handle(at: x(clip.edit.effectiveOut(duration: duration)), width: w) { t in
+                        clip.edit.outPoint = max(t, clip.edit.inPoint + 0.2)
+                    }
                 }
-
-                // Pending markers
-                if let p = pendingCutStart {
-                    marker(at: x(p), color: .red)
-                }
-                if let p = pendingSpeedStart {
-                    marker(at: x(p), color: .orange)
-                }
-
-                // Playhead
-                Rectangle()
-                    .fill(.white)
-                    .frame(width: 2)
-                    .offset(x: x(player.currentSourceTime) - 1)
-                    .shadow(radius: 1)
+                .frame(height: handleHeight)
             }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        guard duration > 0, w > 0 else { return }
-                        let t = Double(min(max(value.location.x / w, 0), 1)) * duration
-                        player.seekSource(to: t)
-                    }
-            )
         }
     }
 
-    private func marker(at xPos: CGFloat, color: Color) -> some View {
-        Rectangle()
-            .fill(color)
-            .frame(width: 2)
-            .offset(x: xPos - 1)
+    private func pendingMark(at xPos: CGFloat, _ color: Color) -> some View {
+        Rectangle().fill(color).frame(width: 1.5).offset(x: xPos - 0.75)
+    }
+
+    private func handle(at xPos: CGFloat, width: CGFloat,
+                        update: @escaping (Double) -> Void) -> some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(Color.accentColor)
+            .frame(width: 5, height: handleHeight - 2)
+            .offset(x: xPos - 2.5)
+            .contentShape(Rectangle().inset(by: -6))
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        guard duration > 0, width > 0 else { return }
+                        let t = Double(min(max((xPos + value.translation.width) / width, 0), 1)) * duration
+                        update(t)
+                    }
+            )
+            .help("Drag to trim")
+    }
+}
+
+/// Time ruler: ticks at a sensible interval for the clip's length.
+private struct Ruler: View {
+    var duration: Double
+
+    var body: some View {
+        Canvas { ctx, size in
+            guard duration > 0.5 else { return }
+            let intervals: [Double] = [1, 2, 5, 10, 15, 30, 60, 120, 300]
+            let step = intervals.first { duration / $0 <= 12 } ?? 600
+            var t = 0.0
+            while t <= duration {
+                let xPos = CGFloat(t / duration) * size.width
+                let isMajor = true
+                let tick = Path { p in
+                    p.move(to: CGPoint(x: xPos, y: size.height))
+                    p.addLine(to: CGPoint(x: xPos, y: size.height - (isMajor ? 5 : 3)))
+                }
+                ctx.stroke(tick, with: .color(.secondary.opacity(0.5)), lineWidth: 1)
+                if t + step <= duration {   // no label crowding the right edge
+                    let label = Text(format(seconds: t))
+                        .font(.system(size: 8.5).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                    ctx.draw(ctx.resolve(label), at: CGPoint(x: xPos + 3, y: size.height - 9),
+                             anchor: .leading)
+                }
+                t += step
+            }
+        }
     }
 }

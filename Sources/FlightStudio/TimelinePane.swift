@@ -137,6 +137,21 @@ private struct MusicControls: View {
                 set: { clip.edit.music?.volume = $0 }
             ), in: 0...1)
             .frame(width: 76)
+            HStack(spacing: 3) {
+                Text("In")
+                Slider(value: Binding(
+                    get: { clip.edit.music?.fadeIn ?? 1 },
+                    set: { clip.edit.music?.fadeIn = $0 }
+                ), in: 0...10, step: 0.25)
+                .frame(width: 54)
+                Text("Out")
+                Slider(value: Binding(
+                    get: { clip.edit.music?.fadeOut ?? 2 },
+                    set: { clip.edit.music?.fadeOut = $0 }
+                ), in: 0...10, step: 0.25)
+                .frame(width: 54)
+            }
+            .font(.caption2)
             Toggle("Mute clip", isOn: Binding(
                 get: { clip.edit.music?.muteOriginal ?? true },
                 set: { clip.edit.music?.muteOriginal = $0 }

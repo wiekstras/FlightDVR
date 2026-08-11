@@ -15,7 +15,9 @@ it, and add eased speed ramps.
   day — dates parsed out of filenames when present, file dates otherwise), name,
   length or size.
   Finder folders and supported video files can also be dropped directly onto
-  the window or opened with DVR Studio.
+  the window or opened with DVR Studio. Superseded scans and metadata workers
+  are cancelled when switching libraries, so stale removable-drive work cannot
+  overwrite the current view or keep launching decoders.
 - **Manage** — move clips to the Trash (always recoverable, never hard-deleted)
   from the right-click menu, the Delete key, or Clips → Move Ticked to Trash.
 - **Preview natively** — `.ts` files are losslessly remuxed into a cache with the

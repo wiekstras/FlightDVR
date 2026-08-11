@@ -310,6 +310,7 @@ final class ClipStore: ObservableObject {
     private var waveformTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
     private var pendingProjectOpen: (data: Data, sourceURL: URL)?
     private var activeScanID: UUID?
+    private var metadataLoadTask: (id: UUID, task: Task<Void, Never>)?
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
@@ -509,6 +510,8 @@ final class ClipStore: ObservableObject {
         guard let folder = sourceFolder else { return }
         let scanID = UUID()
         activeScanID = scanID
+        metadataLoadTask?.task.cancel()
+        metadataLoadTask = nil
         UserDefaults.standard.set(folder.path, forKey: Self.lastFolderDefaultsKey)
         isScanning = true
         statusMessage = "Scanning \(folder.path)…"
@@ -571,15 +574,21 @@ final class ClipStore: ObservableObject {
     private func loadMetadata() {
         let pending = clips.filter { $0.info == nil }
         guard !pending.isEmpty else { return }
-        Task.detached(priority: .utility) {
+        metadataLoadTask?.task.cancel()
+        let taskID = UUID()
+        let task = Task.detached(priority: .utility) { [weak self] in
             await withTaskGroup(of: Void.self) { group in
                 var iterator = pending.makeIterator()
                 func addNext(_ group: inout TaskGroup<Void>) -> Bool {
-                    guard let clip = iterator.next() else { return false }
+                    guard !Task.isCancelled, let clip = iterator.next() else { return false }
                     group.addTask {
+                        guard !Task.isCancelled else { return }
                         let info = try? Probe.probe(clip.url)
+                        guard !Task.isCancelled else { return }
                         let thumb = Self.extractThumbnail(for: clip.url, duration: info?.duration ?? 0)
+                        guard !Task.isCancelled else { return }
                         await MainActor.run {
+                            guard self?.metadataLoadTask?.id == taskID else { return }
                             clip.info = info
                             clip.thumbnail = thumb
                         }
@@ -591,7 +600,12 @@ final class ClipStore: ObservableObject {
                     _ = addNext(&group)
                 }
             }
+            await MainActor.run { [weak self] in
+                guard self?.metadataLoadTask?.id == taskID else { return }
+                self?.metadataLoadTask = nil
+            }
         }
+        metadataLoadTask = (taskID, task)
     }
 
     // MARK: File management

@@ -108,7 +108,8 @@ final class ClipStore: ObservableObject {
     /// Clips grouped into one section per flying day (date order only).
     var daySections: [(day: Date, clips: [Clip])] {
         let grouped = Dictionary(grouping: sortedClips, by: \.flightDay)
-        return grouped.keys.sorted(by: reverseSort ? < : >).map { ($0, grouped[$0]!) }
+        return grouped.keys.sorted { reverseSort ? $0 < $1 : $0 > $1 }
+            .map { ($0, grouped[$0]!) }
     }
 
     nonisolated static let cacheRoot: URL = {
@@ -139,15 +140,14 @@ final class ClipStore: ObservableObject {
             errorHandler: { _, _ in true }
         ) else { return [] }
         var found: [URL] = []
-        for case let url as URL in enumerator {
+        while let url = enumerator.nextObject() as? URL {
             if enumerator.level > maxDepth {
                 enumerator.skipDescendants()
                 continue
             }
-            if exts.contains(url.pathExtension.lowercased()) {
-                found.append(url)
-                if stopAtFirst { break }
-            }
+            guard exts.contains(url.pathExtension.lowercased()) else { continue }
+            found.append(url.standardizedFileURL)
+            if stopAtFirst { break }
         }
         return found.sorted {
             $0.path.localizedStandardCompare($1.path) == .orderedAscending
@@ -160,17 +160,16 @@ final class ClipStore: ObservableObject {
             let volumes = (try? FileManager.default.contentsOfDirectory(
                 at: URL(fileURLWithPath: "/Volumes"),
                 includingPropertiesForKeys: nil)) ?? []
-            var hit: URL?
-            for vol in volumes {
+            let hit = volumes.first { vol in
                 // /Volumes contains a link to the boot volume — never trawl that.
                 let resolved = vol.resolvingSymlinksInPath().path
-                if resolved == "/" || resolved.hasPrefix("/System") { continue }
+                if resolved == "/" || resolved.hasPrefix("/System") { return false }
                 // Recordings can be nested (movies/, DCIM/…, or copied subfolders),
                 // so search the whole card, not one fixed path.
                 if !Self.findVideoFiles(in: vol, onlyTS: true, stopAtFirst: true).isEmpty {
-                    hit = vol
-                    break
+                    return true
                 }
+                return false
             }
             await MainActor.run { [weak self] in
                 guard let self else { return }

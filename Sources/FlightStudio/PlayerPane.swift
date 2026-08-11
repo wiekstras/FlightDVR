@@ -19,8 +19,9 @@ final class PlayerController: ObservableObject {
             forInterval: CMTime(seconds: 0.05, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
+            guard let controller = self else { return }
             Task { @MainActor in
-                self?.currentTime = time.seconds
+                controller.currentTime = time.seconds
             }
         }
     }

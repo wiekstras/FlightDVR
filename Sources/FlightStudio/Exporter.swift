@@ -295,7 +295,7 @@ final class ExportQueue: ObservableObject {
         let passes = Double(commands.count)
         for (index, args) in commands.enumerated() {
             let passBase = Double(index) / passes
-            try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
+            _ = try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
                 try FFmpeg.run(args, onProgressSeconds: { seconds in
                     let p = passBase + min(seconds / outDur, 1) / passes
                     Task { @MainActor in cancel.progress = p }
@@ -313,7 +313,7 @@ final class ExportQueue: ObservableObject {
         }
         let totalDuration = max(inputs.reduce(0) { $0 + $1.1.duration }, 0.01)
         let args = try StitchCommandBuilder.build(inputs: inputs, settings: job.settings, output: job.outputURL)
-        try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
+        _ = try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
             try FFmpeg.run(args, onProgressSeconds: { seconds in
                 Task { @MainActor in cancel.progress = min(seconds / totalDuration, 1) }
             }, isCancelled: { cancel.cancelFlag })

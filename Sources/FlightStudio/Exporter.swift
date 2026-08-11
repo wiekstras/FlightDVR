@@ -227,6 +227,17 @@ enum ExportOutput {
     }
 }
 
+enum SequenceOrder {
+    static func moved<T>(_ values: [T], from source: Int, to destination: Int) -> [T] {
+        guard values.indices.contains(source), values.indices.contains(destination),
+              source != destination else { return values }
+        var copy = values
+        let item = copy.remove(at: source)
+        copy.insert(item, at: destination)
+        return copy
+    }
+}
+
 enum ExportDiskSpace {
     /// Estimate the private staging file before encoding. The margin covers
     /// container overhead and bitrate variability without blocking reasonable jobs.

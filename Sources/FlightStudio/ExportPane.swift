@@ -5,6 +5,8 @@ struct ExportPane: View {
     @EnvironmentObject var queue: ExportQueue
     @State private var settings = ExportSettings()
     @State private var hardwareAvailable: Bool?
+    @State private var sequenceClips: [Clip] = []
+    @State private var showingSequenceComposer = false
 
     var body: some View {
         ScrollView {
@@ -141,13 +143,13 @@ struct ExportPane: View {
                         .disabled(store.selectedClip?.highlights.isEmpty != false)
                     }
                     .controlSize(.small)
-                    Button("Stitch ticked into one video") {
-                        let ordered = store.sortedClips.filter(\.ticked)
-                        queue.enqueueStitch(clips: ordered, settings: settings)
+                    Button("Build sequence…") {
+                        sequenceClips = store.sortedClips.filter(\.ticked)
+                        showingSequenceComposer = true
                     }
                     .controlSize(.small)
                     .disabled(store.tickedClips.count < 2)
-                    Text("Stitches in the current list order. Matching resolutions are required.")
+                    Text("Arrange selected recordings before creating one continuous video.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -187,6 +189,11 @@ struct ExportPane: View {
         .task {
             hardwareAvailable = await Task.detached { HardwareDetect.videoToolboxWorks() }.value
         }
+        .sheet(isPresented: $showingSequenceComposer) {
+            SequenceComposer(clips: $sequenceClips, settings: settings) { ordered in
+                queue.enqueueStitch(clips: ordered, settings: settings)
+            }
+        }
     }
 
     private var framingDescription: String {
@@ -203,6 +210,102 @@ struct ExportPane: View {
             Eyebrow(label)
             content()
         }
+    }
+}
+
+private struct SequenceComposer: View {
+    @Binding var clips: [Clip]
+    let settings: ExportSettings
+    let onQueue: ([Clip]) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var incompatible: Bool {
+        guard let reference = clips.first?.info else { return true }
+        return clips.contains {
+            guard let info = $0.info else { return true }
+            return info.width != reference.width || info.height != reference.height
+        }
+    }
+
+    private var totalDuration: Double {
+        clips.reduce(0) { $0 + ($1.info?.duration ?? 0) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Build Sequence").font(.title2.weight(.semibold))
+                    Text("Drag recordings or use the arrows to set playback order.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("\(clips.count) clips · \(EditorTimecode.string(seconds: totalDuration, fps: 0))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            List {
+                ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
+                    HStack(spacing: 10) {
+                        Text("\(index + 1)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 20, alignment: .trailing)
+                        if let thumbnail = clip.thumbnail {
+                            Image(nsImage: thumbnail)
+                                .resizable().aspectRatio(contentMode: .fill)
+                                .frame(width: 64, height: 36).clipped()
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(clip.name).lineLimit(1)
+                            if let info = clip.info {
+                                Text("\(info.width)×\(info.height) · \(EditorTimecode.string(seconds: info.duration, fps: 0))")
+                                    .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                            } else {
+                                Text("Reading metadata…").font(.caption2).foregroundStyle(.orange)
+                            }
+                        }
+                        Spacer()
+                        Button { move(index, by: -1) } label: { Image(systemName: "arrow.up") }
+                            .buttonStyle(.plain).disabled(index == 0).help("Move earlier")
+                        Button { move(index, by: 1) } label: { Image(systemName: "arrow.down") }
+                            .buttonStyle(.plain).disabled(index == clips.count - 1).help("Move later")
+                        Button { clips.remove(at: index) } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.plain).help("Remove from sequence")
+                    }
+                    .padding(.vertical, 3)
+                }
+                .onMove { offsets, destination in
+                    clips.move(fromOffsets: offsets, toOffset: destination)
+                }
+            }
+            .frame(minHeight: 240)
+            if incompatible {
+                Label("All clips need matching dimensions and completed metadata before stitching.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if settings.preset == .social || settings.preset == .remux {
+                Text("Sequences use the Master H.264 preset because stitching requires a full encode.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { dismiss() }
+                Spacer()
+                Button("Add Sequence to Queue") {
+                    onQueue(clips)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(clips.count < 2 || incompatible)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 620, minHeight: 430)
+    }
+
+    private func move(_ index: Int, by offset: Int) {
+        clips = SequenceOrder.moved(clips, from: index, to: index + offset)
     }
 }
 

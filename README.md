@@ -76,7 +76,8 @@ it, and add eased speed ramps.
   Preset-aware disk preflight rejects jobs before encoding when the destination
   volume cannot hold the private staging file.
 - **Stitch** — tick two or more compatible clips and create one continuous,
-  shareable sequence in the current list order.
+  shareable sequence. A native sequence composer supports drag, arrow and remove
+  controls with duration and resolution checks before the job is queued.
 
 ## The colour fix
 

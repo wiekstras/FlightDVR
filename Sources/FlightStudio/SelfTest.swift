@@ -317,6 +317,12 @@ enum SelfTest {
         }
         print("output naming ok")
 
+        guard SequenceOrder.moved(["A", "B", "C"], from: 2, to: 0) == ["C", "A", "B"],
+              SequenceOrder.moved(["A", "B"], from: 0, to: 9) == ["A", "B"] else {
+            throw Failure("sequence reordering lost or misplaced a clip")
+        }
+        print("sequence ordering ok")
+
         // Export jobs survive relaunches with their exact edit and probe data.
         // A running job recovers as retryable, never as a completed output.
         let exportJobID = UUID()

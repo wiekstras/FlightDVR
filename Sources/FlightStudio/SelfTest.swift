@@ -516,6 +516,27 @@ enum SelfTest {
               decodedLegacySettings.cropPositionY == 0.5 else {
             throw Failure("legacy export settings did not default to a centered crop")
         }
+        var squareSettings = socialSettings
+        squareSettings.socialProfile = .instagramSquare
+        squareSettings.socialFraming = .fit
+        let squareCommands = ExportCommandBuilder.build(
+            plan: plan, settings: squareSettings, info: info,
+            source: src, output: socialOut, jobID: UUID())
+        guard squareCommands[0].contains(where: {
+            $0.contains("scale=1080:1080") && $0.contains("pad=1080:1080")
+        }) else {
+            throw Failure("Instagram square preset did not build a 1:1 canvas")
+        }
+        var portraitSettings = squareSettings
+        portraitSettings.socialProfile = .instagramPortrait
+        let portraitCommands = ExportCommandBuilder.build(
+            plan: plan, settings: portraitSettings, info: info,
+            source: src, output: socialOut, jobID: UUID())
+        guard portraitCommands[0].contains(where: {
+            $0.contains("scale=1080:1350") && $0.contains("pad=1080:1350")
+        }) else {
+            throw Failure("Instagram portrait preset did not build a 4:5 canvas")
+        }
         var publishDraft = PublishDraft()
         publishDraft.title = "Clean gap"
         publishDraft.platforms = [.tiktok, .youtube]
@@ -530,6 +551,17 @@ enum SelfTest {
                                         media: wrongCanvas, fileExists: true)
             .contains(where: { $0.severity == .error && $0.message.contains("expected 1080×1920") }) else {
             throw Failure("wrong social delivery canvas passed publishing preflight")
+        }
+        var instagramDraft = PublishDraft()
+        instagramDraft.title = "Square post"
+        instagramDraft.platforms = [.instagram]
+        let squareMedia = ClipInfo(duration: 12, width: 1080, height: 1080, fps: 60,
+                                   videoCodec: "h264", hasAudio: true,
+                                   colorRange: "tv", fileSize: 2_000_000)
+        guard !PublishValidator.validate(draft: instagramDraft, settings: squareSettings,
+                                         media: squareMedia, fileExists: true)
+            .contains(where: { $0.severity == .error }) else {
+            throw Failure("valid Instagram square post failed publishing preflight")
         }
         var invalidPublishSettings = ExportSettings()
         invalidPublishSettings.preset = .master

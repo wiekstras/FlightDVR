@@ -202,7 +202,13 @@ private struct SocialFramingPreview: View {
     let positionY: Double
 
     private var canvasSize: CGSize {
-        profile.isVertical ? CGSize(width: 108, height: 192) : CGSize(width: 224, height: 126)
+        let aspect = CGFloat(profile.canvasSize.width) / CGFloat(profile.canvasSize.height)
+        let maxWidth: CGFloat = profile.isVertical || aspect == 1 ? 150 : 224
+        let maxHeight: CGFloat = 192
+        if maxWidth / aspect <= maxHeight {
+            return CGSize(width: maxWidth, height: maxWidth / aspect)
+        }
+        return CGSize(width: maxHeight * aspect, height: maxHeight)
     }
 
     var body: some View {
@@ -232,7 +238,7 @@ private struct SocialFramingPreview: View {
         .clipped()
         .overlay(Rectangle().strokeBorder(.separator))
         .overlay(alignment: .bottomTrailing) {
-            Text(profile.isVertical ? "9:16" : "16:9")
+            Text(profile.aspectLabel)
                 .font(.caption2.monospacedDigit())
                 .padding(4)
                 .background(.black.opacity(0.65))

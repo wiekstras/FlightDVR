@@ -58,25 +58,43 @@ enum MasterQuality: String, CaseIterable, Identifiable, Codable {
 enum SocialProfile: String, CaseIterable, Identifiable, Codable {
     case tiktok = "TikTok"
     case instagramReel = "Instagram Reel"
+    case instagramSquare = "Instagram Square Post"
+    case instagramPortrait = "Instagram Portrait Post"
     case youtubeShort = "YouTube Short"
     case youtube = "YouTube"
     var id: String { rawValue }
 
-    var canvasLabel: String { isVertical ? "1080 × 1920 · 9:16" : "1920 × 1080 · 16:9" }
-    var isVertical: Bool { self != .youtube }
+    var canvasSize: (width: Int, height: Int) {
+        switch self {
+        case .tiktok, .instagramReel, .youtubeShort: (1080, 1920)
+        case .instagramSquare: (1080, 1080)
+        case .instagramPortrait: (1080, 1350)
+        case .youtube: (1920, 1080)
+        }
+    }
+    var aspectLabel: String {
+        switch self {
+        case .tiktok, .instagramReel, .youtubeShort: "9:16"
+        case .instagramSquare: "1:1"
+        case .instagramPortrait: "4:5"
+        case .youtube: "16:9"
+        }
+    }
+    var canvasLabel: String {
+        "\(canvasSize.width) × \(canvasSize.height) · \(aspectLabel)"
+    }
+    var isVertical: Bool { canvasSize.height > canvasSize.width }
+    var isShortVertical: Bool { canvasSize.width == 1080 && canvasSize.height == 1920 }
     func videoFilter(framing: SocialFraming, positionX: Double = 0.5,
                      positionY: Double = 0.5) -> String {
-        let size = isVertical ? "1080:1920" : "1920:1080"
+        let size = "\(canvasSize.width):\(canvasSize.height)"
         if framing == .fill {
             let x = positionX.isFinite ? min(max(positionX, 0), 1) : 0.5
             let y = positionY.isFinite ? min(max(positionY, 0), 1) : 0.5
             return String(format: "scale=%@:force_original_aspect_ratio=increase,crop=%@:(iw-ow)*%.4f:(ih-oh)*%.4f",
                           size, size, x, y)
         }
-        if isVertical {
-            return "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
-        }
-        return "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black"
+        return "scale=\(size):force_original_aspect_ratio=decrease,pad=\(size):(ow-iw)/2:(oh-ih)/2:black"
     }
 }
 

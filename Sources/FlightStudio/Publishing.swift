@@ -94,11 +94,11 @@ enum PublishValidator {
                                            message: "The exported video could not be verified as playable."))
             }
             if settings.preset == .social {
-                let expected = settings.socialProfile.isVertical ? (1080, 1920) : (1920, 1080)
-                if media.width != expected.0 || media.height != expected.1 {
+                let expected = settings.socialProfile.canvasSize
+                if media.width != expected.width || media.height != expected.height {
                     issues.append(PublishIssue(
                         severity: .error,
-                        message: "The export is \(media.width)×\(media.height), expected \(expected.0)×\(expected.1)."))
+                        message: "The export is \(media.width)×\(media.height), expected \(expected.width)×\(expected.height)."))
                 }
                 if media.videoCodec != "h264" {
                     issues.append(PublishIssue(severity: .error,
@@ -106,12 +106,17 @@ enum PublishValidator {
                 }
             }
         }
-        let vertical = settings.preset == .social && settings.socialProfile.isVertical
-        if (draft.platforms.contains(.tiktok) || draft.platforms.contains(.instagram)) && !vertical {
+        let shortVertical = settings.preset == .social && settings.socialProfile.isShortVertical
+        if draft.platforms.contains(.tiktok) && !shortVertical {
             issues.append(PublishIssue(severity: .error,
-                                       message: "TikTok and Instagram require a 9:16 Social export."))
+                                       message: "TikTok requires a 9:16 Social export."))
         }
-        if draft.platforms.contains(.youtube), settings.preset == .social, settings.socialProfile.isVertical {
+        if draft.platforms.contains(.instagram), settings.preset != .social {
+            issues.append(PublishIssue(severity: .error,
+                                       message: "Instagram requires a Social export preset."))
+        }
+        if draft.platforms.contains(.youtube), settings.preset == .social,
+           settings.socialProfile.isShortVertical {
             issues.append(PublishIssue(severity: .warning,
                                        message: "This will publish as a vertical YouTube Short."))
         }

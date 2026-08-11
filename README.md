@@ -24,6 +24,7 @@ it, and add eased speed ramps.
   decoding work.
 - **Edit** — per clip:
   - trim in/out points
+  - frame-aware `HH:MM:SS:FF` source and output timecode, including multi-hour recordings
   - **cut ranges out of the middle** (as many as you like)
   - **speed ramp zones** (0.25×–4×) with cosine-eased ramps at both edges,
     so speed changes flow instead of snapping

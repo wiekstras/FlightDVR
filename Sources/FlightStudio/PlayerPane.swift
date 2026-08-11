@@ -250,6 +250,9 @@ struct PlayerPane: View {
     @EnvironmentObject var store: ClipStore
 
     var body: some View {
+        let clipInfo = store.selectedClip?.info
+        let sourceFPS = clipInfo?.fps ?? 0
+        let sourceDuration = clipInfo?.duration ?? player.duration
         VStack(spacing: 0) {
             ZStack {
                 PlayerViewRepresentable(player: player.player)
@@ -302,16 +305,19 @@ struct PlayerPane: View {
                 .buttonStyle(.borderless)
                 .keyboardShortcut("l", modifiers: [])
                 .help("Forward 5 seconds (L)")
-                Text(timecode(player.currentTime))
+                Text(EditorTimecode.string(seconds: player.currentSourceTime, fps: sourceFPS))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
-                Text("/ \(timecode(player.duration))")
+                    .help("Current source timecode")
+                Text("/ \(EditorTimecode.string(seconds: sourceDuration, fps: sourceFPS))")
                     .font(.system(size: 13).monospacedDigit())
                     .foregroundStyle(.tertiary)
                 Spacer()
                 if let clip = store.selectedClip, !clip.edit.isDefault, let info = clip.info {
                     HStack(spacing: 4) {
                         Eyebrow("Out")
-                        Text(timecode(clip.edit.outputDuration(duration: info.duration)))
+                        Text(EditorTimecode.string(
+                            seconds: clip.edit.outputDuration(duration: info.duration),
+                            fps: info.fps))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -332,10 +338,22 @@ struct PlayerPane: View {
     }
 }
 
-func timecode(_ seconds: Double) -> String {
-    guard seconds.isFinite, seconds >= 0 else { return "0:00.0" }
-    let total = seconds
-    let m = Int(total) / 60
-    let s = total - Double(m * 60)
-    return String(format: "%d:%04.1f", m, s)
+enum EditorTimecode {
+    /// A stable source-clock representation with frame precision when probe
+    /// metadata is available, and millisecond precision as a safe fallback.
+    static func string(seconds: Double, fps: Double) -> String {
+        let safeSeconds = seconds.isFinite ? min(max(seconds, 0), 359_999_999) : 0
+        let wholeSeconds = Int(floor(safeSeconds))
+        let hours = wholeSeconds / 3_600
+        let minutes = (wholeSeconds % 3_600) / 60
+        let secs = wholeSeconds % 60
+        guard fps.isFinite, fps > 0 else {
+            let milliseconds = min(Int((safeSeconds - Double(wholeSeconds)) * 1_000), 999)
+            return String(format: "%02d:%02d:%02d.%03d", hours, minutes, secs, milliseconds)
+        }
+        let safeFPS = min(fps, 1_000)
+        let nominalFPS = max(Int(safeFPS.rounded()), 1)
+        let frame = min(Int((safeSeconds - Double(wholeSeconds)) * safeFPS), nominalFPS - 1)
+        return String(format: "%02d:%02d:%02d:%02d", hours, minutes, secs, max(frame, 0))
+    }
 }

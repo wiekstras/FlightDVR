@@ -114,6 +114,14 @@ enum SelfTest {
         }
         print("frame-rate parsing ok")
 
+        guard EditorTimecode.string(seconds: 3_661.5, fps: 60) == "01:01:01:30",
+              EditorTimecode.string(seconds: 59.999, fps: 30) == "00:00:59:29",
+              EditorTimecode.string(seconds: 1.25, fps: 0) == "00:00:01.250",
+              EditorTimecode.string(seconds: .nan, fps: 60) == "00:00:00:00" else {
+            throw Failure("editor timecode formatting mishandled hours, frames, or fallback precision")
+        }
+        print("editor timecode formatting ok")
+
         let snapped = TimelineMath.snappedTime(1.011, fps: 60, duration: 10)
         guard abs(snapped - (61.0 / 60.0)) < 0.000_001,
               TimelineMath.snappedTime(-2, fps: 60, duration: 10) == 0,

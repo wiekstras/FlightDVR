@@ -370,13 +370,13 @@ private struct EditChips: View {
             HStack(spacing: 6) {
                 ForEach(clip.edit.cuts) { cut in
                     chip(icon: "scissors", color: .red,
-                         text: "\(timecode(cut.start))–\(timecode(cut.end))") {
+                         text: "\(tc(cut.start))–\(tc(cut.end))") {
                         clip.edit.cuts.removeAll { $0.id == cut.id }
                     }
                 }
                 ForEach(clip.edit.speedZones) { zone in
                     chip(icon: "hare", color: .orange,
-                         text: "\(zone.speed.formatted())× \(timecode(zone.start))–\(timecode(zone.end))") {
+                         text: "\(zone.speed.formatted())× \(tc(zone.start))–\(tc(zone.end))") {
                         clip.edit.speedZones.removeAll { $0.id == zone.id }
                     }
                 }
@@ -405,7 +405,7 @@ private struct EditChips: View {
             .textFieldStyle(.plain)
             .font(.caption2)
             .frame(width: 72)
-            Text(timecode(marker.time)).font(.caption2.monospacedDigit())
+            Text(tc(marker.time)).font(.caption2.monospacedDigit())
             Button {
                 clip.edit.markers.removeAll { $0.id == marker.id }
             } label: {
@@ -417,6 +417,10 @@ private struct EditChips: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .overlay(Capsule().strokeBorder(.separator))
+    }
+
+    private func tc(_ seconds: Double) -> String {
+        EditorTimecode.string(seconds: seconds, fps: clip.info?.fps ?? 0)
     }
 
     private func chip(icon: String, color: Color, text: String,

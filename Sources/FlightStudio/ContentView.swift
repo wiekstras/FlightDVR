@@ -142,6 +142,12 @@ struct ClipListView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                Button {
+                    store.reverseSort.toggle()
+                } label: {
+                    Image(systemName: store.reverseSort ? "arrow.up" : "arrow.down")
+                }
+                .help("Reverse sort order")
             }
             .padding(8)
             Divider()

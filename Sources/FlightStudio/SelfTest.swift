@@ -60,7 +60,9 @@ enum SelfTest {
             try FileManager.default.copyItem(at: src, to: nestedClip)
         }
         let scanned = ClipStore.findVideoFiles(in: workDir.appendingPathComponent("card"))
-        guard scanned.contains(nestedClip) else {
+        guard scanned.contains(where: {
+            $0.standardizedFileURL.path == nestedClip.standardizedFileURL.path
+        }) else {
             throw Failure("recursive scan missed \(nestedClip.path)")
         }
         guard !ClipStore.findVideoFiles(in: workDir, onlyTS: true, stopAtFirst: true).isEmpty else {

@@ -146,7 +146,7 @@ final class ClipStore: ObservableObject {
                 continue
             }
             guard exts.contains(url.pathExtension.lowercased()) else { continue }
-            found.append(url)
+            found.append(url.standardizedFileURL)
             if stopAtFirst { break }
         }
         return found.sorted {

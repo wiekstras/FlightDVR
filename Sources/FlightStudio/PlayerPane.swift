@@ -12,7 +12,7 @@ enum PlaybackMath {
     static let supportedRates = [0.25, 0.5, 1.0, 1.5, 2.0]
     static func sanitizedRate(_ rate: Double) -> Double {
         guard rate.isFinite else { return 1 }
-        supportedRates.min(by: { abs($0 - rate) < abs($1 - rate) }) ?? 1
+        return supportedRates.min(by: { abs($0 - rate) < abs($1 - rate) }) ?? 1
     }
 }
 

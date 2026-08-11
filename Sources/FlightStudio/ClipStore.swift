@@ -6,6 +6,8 @@ struct ClipLibraryRecord: Codable, Equatable {
     var favorite = false
     var tags: [String] = []
     var edit: EditPlan? = nil
+    /// Optional keeps records written before highlight shelves decodable.
+    var highlights: [SavedHighlight]? = nil
 }
 
 /// A single decoded metadata index for the process. Previously every Clip init
@@ -82,10 +84,14 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     @Published var tags: [String] = [] {
         didSet { persistLibraryRecord() }
     }
+    @Published var highlights: [SavedHighlight] = [] {
+        didSet { persistLibraryRecord() }
+    }
     private var undoEdits: [EditPlan] = []
     private var redoEdits: [EditPlan] = []
     private var restoringEdit = false
     private var editSaveWorkItem: DispatchWorkItem?
+    private let isLibraryBacked: Bool
 
     let fileDate: Date           // the filesystem's story
     let parsedDate: Date?        // a date found in the filename, which we trust more
@@ -94,16 +100,28 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         self.init(url: url, fileDate: Self.readFileDate(for: url))
     }
 
-    init(url: URL, fileDate: Date) {
+    init(url: URL, fileDate: Date, isLibraryBacked: Bool = true,
+         editOverride: EditPlan? = nil) {
         self.url = url
         self.id = url
+        self.isLibraryBacked = isLibraryBacked
         self.relativeName = url.lastPathComponent
         self.fileDate = fileDate
         self.parsedDate = Clip.parseDate(from: url.lastPathComponent)
-        let record = ClipLibraryMetadataIndex.shared.record(for: url)
+        let record = isLibraryBacked
+            ? ClipLibraryMetadataIndex.shared.record(for: url) : ClipLibraryRecord()
         self.favorite = record.favorite
         self.tags = record.tags
-        self.edit = record.edit ?? EditPlan()
+        self.edit = editOverride ?? record.edit ?? EditPlan()
+        self.highlights = record.highlights ?? []
+    }
+
+    static func exportVariant(from clip: Clip, edit: EditPlan) -> Clip {
+        let variant = Clip(url: clip.url, fileDate: clip.fileDate,
+                           isLibraryBacked: false, editOverride: edit)
+        variant.info = clip.info
+        variant.relativeName = clip.relativeName
+        return variant
     }
 
     var name: String { url.lastPathComponent }
@@ -144,11 +162,30 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         tags.removeAll { $0 == tag }
     }
 
+    @discardableResult
+    func saveCurrentHighlight(duration: Double) -> SavedHighlight? {
+        guard edit.validationError(duration: duration) == nil else { return nil }
+        let highlight = SavedHighlight(name: "Highlight \(highlights.count + 1)",
+                                       edit: edit.sanitized(duration: duration))
+        highlights.append(highlight)
+        return highlight
+    }
+
+    func loadHighlight(_ highlight: SavedHighlight) {
+        edit = highlight.edit
+    }
+
+    func removeHighlight(id: UUID) {
+        highlights.removeAll { $0.id == id }
+    }
+
     private func persistLibraryRecord() {
+        guard isLibraryBacked else { return }
         editSaveWorkItem?.cancel()
         let savedEdit = edit.isDefault && edit.markers.isEmpty ? nil : edit
         ClipLibraryMetadataIndex.shared.save(
-            ClipLibraryRecord(favorite: favorite, tags: tags, edit: savedEdit),
+            ClipLibraryRecord(favorite: favorite, tags: tags, edit: savedEdit,
+                              highlights: highlights.isEmpty ? nil : highlights),
             for: url
         )
     }

@@ -97,6 +97,11 @@ private struct TimelineEditor: View {
                 .keyboardShortcut("h", modifiers: [])
                 .disabled(duration <= 0)
                 .help("Create a highlight centered on the current moment (H)")
+                Button("Save Highlight") {
+                    _ = clip.saveCurrentHighlight(duration: duration)
+                }
+                .disabled(clip.edit.validationError(duration: duration) != nil)
+                .help("Preserve this edit as another highlight from the same recording")
                 Text("Sets In/Out without changing the source")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -105,6 +110,12 @@ private struct TimelineEditor: View {
             .controlSize(.small)
             .padding(.horizontal, 16)
             .padding(.top, 8)
+
+            if !clip.highlights.isEmpty {
+                HighlightShelf(clip: clip, player: player)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+            }
 
             // The bench: one flat row of tools, grouped by tracked labels.
             ScrollView(.horizontal, showsIndicators: false) {
@@ -255,6 +266,70 @@ private struct TimelineEditor: View {
         } catch {
             projectError = error.localizedDescription
         }
+    }
+}
+
+private struct HighlightShelf: View {
+    @ObservedObject var clip: Clip
+    @ObservedObject var player: PlayerController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Eyebrow("Saved Highlights · \(clip.highlights.count)")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(clip.highlights) { highlight in
+                        HStack(spacing: 5) {
+                            Button {
+                                clip.loadHighlight(highlight)
+                                player.seekSource(to: highlight.edit.inPoint)
+                            } label: {
+                                Image(systemName: "play.rectangle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Load \(highlight.name)")
+                            TextField("Highlight", text: Binding(
+                                get: {
+                                    clip.highlights.first(where: { $0.id == highlight.id })?.name
+                                        ?? highlight.name
+                                },
+                                set: { name in
+                                    guard let index = clip.highlights.firstIndex(where: {
+                                        $0.id == highlight.id
+                                    }) else { return }
+                                    clip.highlights[index].name = String(name.prefix(80))
+                                }
+                            ))
+                            .textFieldStyle(.plain)
+                            .font(.caption)
+                            .frame(width: 100)
+                            Text(duration(highlight.edit))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                            Button {
+                                clip.removeHighlight(id: highlight.id)
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 8, weight: .bold))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.tertiary)
+                            .help("Delete saved highlight")
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
+        }
+    }
+
+    private func duration(_ edit: EditPlan) -> String {
+        guard let info = clip.info else { return "—" }
+        return EditorTimecode.string(seconds: edit.outputDuration(duration: info.duration),
+                                     fps: info.fps)
     }
 }
 

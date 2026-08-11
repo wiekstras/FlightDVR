@@ -277,6 +277,12 @@ struct ClipRow: View {
                             .foregroundStyle(.orange)
                             .help("Has edits")
                     }
+                    if !clip.highlights.isEmpty {
+                        Label("\(clip.highlights.count)", systemImage: "sparkles.rectangle.stack")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .help("\(clip.highlights.count) saved highlight\(clip.highlights.count == 1 ? "" : "s")")
+                    }
                 }
                 if let info = clip.info {
                     Text("\(format(seconds: info.duration)) · \(info.width)×\(info.height) \(Int(info.fps.rounded()))")

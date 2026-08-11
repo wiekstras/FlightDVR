@@ -38,6 +38,9 @@ it, and add eased speed ramps.
     and reopen it later without copying the source footage
   - **automatic recovery** — every edit is also saved as a local draft as it is
     made, so switching clips or relaunching the app does not lose work
+  - **saved highlight shelf** — preserve and name several independent edits from
+    one long DVR recording without copying or modifying the source file, then
+    add the whole shelf to the export queue in one click
   - **Preview edit** — a toggle in the player plays the clip with cuts, ramps
     and music applied, via an AVComposition over the preview cache: instant,
     no encoding, and it follows every change live

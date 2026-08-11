@@ -178,11 +178,17 @@ struct ExportSettings: Codable, Equatable {
 /// same filename in different folders, and existing exports are never replaced
 /// just because they were queued together.
 enum OutputNamer {
+    static func safeBaseName(_ name: String, fallback: String = "Untitled clip") -> String {
+        let illegal = CharacterSet(charactersIn: "/:").union(.controlCharacters)
+        let cleaned = name.components(separatedBy: illegal).joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String((cleaned.isEmpty ? fallback : cleaned).prefix(180))
+    }
+
     static func uniqueURL(in folder: URL, baseName: String, fileExtension: String,
                           reserved: Set<URL> = [],
                           fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }) -> URL {
-        let safeBase = baseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            ? "Untitled clip" : baseName
+        let safeBase = safeBaseName(baseName)
         var index = 1
         while true {
             let suffix = index == 1 ? "" : " \(index)"
@@ -437,10 +443,9 @@ final class ExportQueue: ObservableObject {
             jobs = try ExportQueueStore.load(from: persistenceURL).compactMap { snapshot in
                 guard !snapshot.clips.isEmpty else { return nil }
                 let clips = snapshot.clips.map { saved -> Clip in
-                    let clip = Clip(url: saved.url)
+                    let clip = Clip(url: saved.url, fileDate: Clip.readFileDate(for: saved.url),
+                                    isLibraryBacked: false, editOverride: saved.edit)
                     clip.info = saved.info
-                    clip.edit = saved.edit
-                    clip.clearEditHistory()
                     return clip
                 }
                 var state = snapshot.state
@@ -479,6 +484,24 @@ final class ExportQueue: ObservableObject {
                                              fileExtension: settings.preset.fileExtension,
                                              reserved: Set(jobs.map(\.outputURL)))
             jobs.append(ExportJob(clips: [clip], settings: settings, outputURL: out))
+        }
+        persist()
+    }
+
+    func enqueueHighlights(from clip: Clip, settings: ExportSettings) {
+        guard !clip.highlights.isEmpty else { return }
+        let folder = settings.resolvedOutputFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let sourceName = clip.url.deletingPathExtension().lastPathComponent
+        var reserved = Set(jobs.map(\.outputURL))
+        for highlight in clip.highlights {
+            let variant = Clip.exportVariant(from: clip, edit: highlight.edit)
+            let base = OutputNamer.safeBaseName("\(sourceName) – \(highlight.name)")
+            let out = OutputNamer.uniqueURL(in: folder, baseName: base,
+                                             fileExtension: settings.preset.fileExtension,
+                                             reserved: reserved)
+            reserved.insert(out)
+            jobs.append(ExportJob(clips: [variant], settings: settings, outputURL: out))
         }
         persist()
     }

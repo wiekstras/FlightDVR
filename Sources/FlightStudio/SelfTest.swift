@@ -174,13 +174,25 @@ enum SelfTest {
         }
         favoriteClip.edit = EditPlan(inPoint: 1.5,
                                      markers: [TimelineMarker(time: 2, name: "Recovered")])
+        guard favoriteClip.saveCurrentHighlight(duration: info.duration) != nil else {
+            throw Failure("valid edit could not be saved as a highlight")
+        }
+        favoriteClip.highlights[0].name = "Opening lap"
         favoriteClip.favorite = false // also flushes the coalesced edit draft
         let recoveredClip = Clip(url: src)
         guard recoveredClip.edit.inPoint == 1.5,
-              recoveredClip.edit.markers.first?.name == "Recovered" else {
-            throw Failure("automatic edit draft was not recovered")
+              recoveredClip.edit.markers.first?.name == "Recovered",
+              recoveredClip.highlights.first?.name == "Opening lap",
+              recoveredClip.highlights.first?.edit.inPoint == 1.5 else {
+            throw Failure("automatic edit draft or highlight shelf was not recovered")
         }
-        print("library metadata and edit recovery ok")
+        let detachedVariant = Clip.exportVariant(
+            from: favoriteClip, edit: EditPlan(inPoint: 4, outPoint: 5))
+        detachedVariant.edit.inPoint = 4.5
+        guard Clip(url: src).edit.inPoint == 1.5 else {
+            throw Failure("detached export variant overwrote the active library edit")
+        }
+        print("library metadata, highlight shelf and edit recovery ok")
 
         // The large-library index loads its payload once and serves keyed
         // records without reparsing the complete dictionary for every clip.
@@ -288,7 +300,8 @@ enum SelfTest {
         let third = OutputNamer.uniqueURL(in: exportFolder, baseName: "flight", fileExtension: "mp4",
                                           fileExists: { $0 == first || $0 == second })
         guard first.lastPathComponent == "flight.mp4", second.lastPathComponent == "flight 2.mp4",
-              third.lastPathComponent == "flight 3.mp4" else {
+              third.lastPathComponent == "flight 3.mp4",
+              OutputNamer.safeBaseName(" Final/Lap:\n ") == "Final-Lap-" else {
             throw Failure("output-name collision handling is not deterministic")
         }
         print("output naming ok")

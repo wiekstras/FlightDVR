@@ -133,6 +133,12 @@ struct ExportPane: View {
                             }
                         }
                         .disabled(store.selectedClip == nil)
+                        Button("Add saved highlights") {
+                            if let clip = store.selectedClip {
+                                queue.enqueueHighlights(from: clip, settings: settings)
+                            }
+                        }
+                        .disabled(store.selectedClip?.highlights.isEmpty != false)
                     }
                     .controlSize(.small)
                     Button("Stitch ticked into one video") {

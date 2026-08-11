@@ -65,6 +65,15 @@ struct TitleOverlay: Equatable, Codable {
     }
 }
 
+/// A reusable non-destructive edit variant from one source recording. Creators
+/// can preserve several moments without duplicating multi-gigabyte DVR files.
+struct SavedHighlight: Identifiable, Equatable, Codable {
+    var id = UUID()
+    var name: String
+    var edit: EditPlan
+    var createdAt = Date()
+}
+
 /// A named, non-destructive bookmark for a moment worth returning to.
 struct TimelineMarker: Identifiable, Equatable, Codable {
     var id = UUID()

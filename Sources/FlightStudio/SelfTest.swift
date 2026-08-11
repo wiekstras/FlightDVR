@@ -100,7 +100,28 @@ enum SelfTest {
         }
         print("date parsing ok")
 
-        // 3b. Source↔output time mapping must round-trip through cuts and ramps.
+        // 3c. Invalid timeline data is normalised before it can reach ffmpeg.
+        var messy = EditPlan(inPoint: -2, outPoint: 99,
+                             cuts: [CutRange(start: 2, end: 4), CutRange(start: 3, end: 6),
+                                    CutRange(start: 8, end: 7)],
+                             speedZones: [SpeedZone(start: -1, end: 2, speed: 99, rampDuration: 9)])
+        messy = messy.sanitized(duration: info.duration)
+        guard messy.inPoint == 0, messy.effectiveOut(duration: info.duration) == info.duration,
+              messy.cuts.count == 1, messy.cuts[0].start == 2, messy.cuts[0].end == 6,
+              messy.speedZones[0].speed == 4, messy.speedZones[0].rampDuration <= 1 else {
+            throw Failure("edit sanitisation did not clamp and merge malformed ranges")
+        }
+        var empty = EditPlan(inPoint: 5, outPoint: 5)
+        guard empty.validationError(duration: info.duration) != nil else {
+            throw Failure("an empty trim was accepted for export")
+        }
+        empty = EditPlan(cuts: [CutRange(start: 0, end: info.duration)])
+        guard empty.validationError(duration: info.duration) != nil else {
+            throw Failure("an all-cut edit was accepted for export")
+        }
+        print("edit validation ok")
+
+        // 3d. Source↔output time mapping must round-trip through cuts and ramps.
         for t in stride(from: plan.inPoint, to: 9.0, by: 0.25) {
             // Cut interiors and their boundaries legitimately collapse to one output time.
             let inCut = plan.cuts.contains { t >= $0.start && t <= $0.end }

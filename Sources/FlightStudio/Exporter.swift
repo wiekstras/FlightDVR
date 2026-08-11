@@ -66,6 +66,25 @@ struct ExportSettings {
     var outputFolder: URL?
 }
 
+/// Produces a non-destructive export name.  A card can contain clips with the
+/// same filename in different folders, and existing exports are never replaced
+/// just because they were queued together.
+enum OutputNamer {
+    static func uniqueURL(in folder: URL, baseName: String, fileExtension: String,
+                          reserved: Set<URL> = [],
+                          fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }) -> URL {
+        let safeBase = baseName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Untitled clip" : baseName
+        var index = 1
+        while true {
+            let suffix = index == 1 ? "" : " (index)"
+            let candidate = folder.appendingPathComponent("\(safeBase)\(suffix).\(fileExtension)")
+            if !reserved.contains(candidate) && !fileExists(candidate) { return candidate }
+            index += 1
+        }
+    }
+}
+
 // MARK: - Jobs
 
 @MainActor
@@ -102,9 +121,9 @@ final class ExportQueue: ObservableObject {
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for clip in clips {
             let base = clip.url.deletingPathExtension().lastPathComponent
-            let out = folder.appendingPathComponent("\(base).\(settings.preset.fileExtension)")
-            // Never queue the same output twice.
-            if jobs.contains(where: { $0.outputURL == out && $0.state != .failed("") }) { continue }
+            let out = OutputNamer.uniqueURL(in: folder, baseName: base,
+                                             fileExtension: settings.preset.fileExtension,
+                                             reserved: Set(jobs.map(\.outputURL)))
             jobs.append(ExportJob(clip: clip, settings: settings, outputURL: out))
         }
     }

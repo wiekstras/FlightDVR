@@ -121,7 +121,21 @@ enum SelfTest {
         }
         print("edit validation ok")
 
-        // 3d. Source↔output time mapping must round-trip through cuts and ramps.
+        // 3d. Queued and on-disk name collisions receive predictable suffixes.
+        let exportFolder = workDir.appendingPathComponent("exports", isDirectory: true)
+        let first = OutputNamer.uniqueURL(in: exportFolder, baseName: "flight", fileExtension: "mp4",
+                                          fileExists: { _ in false })
+        let second = OutputNamer.uniqueURL(in: exportFolder, baseName: "flight", fileExtension: "mp4",
+                                           reserved: Set([first]), fileExists: { _ in false })
+        let third = OutputNamer.uniqueURL(in: exportFolder, baseName: "flight", fileExtension: "mp4",
+                                          fileExists: { $0 == first || $0 == second })
+        guard first.lastPathComponent == "flight.mp4", second.lastPathComponent == "flight 2.mp4",
+              third.lastPathComponent == "flight 3.mp4" else {
+            throw Failure("output-name collision handling is not deterministic")
+        }
+        print("output naming ok")
+
+        // 3e. Source↔output time mapping must round-trip through cuts and ramps.
         for t in stride(from: plan.inPoint, to: 9.0, by: 0.25) {
             // Cut interiors and their boundaries legitimately collapse to one output time.
             let inCut = plan.cuts.contains { t >= $0.start && t <= $0.end }

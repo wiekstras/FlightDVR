@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import CryptoKit
+import UniformTypeIdentifiers
 
 struct ClipLibraryRecord: Codable, Equatable {
     var favorite = false
@@ -304,8 +305,11 @@ final class ClipStore: ObservableObject {
     @Published var favoritesOnly = false
     @Published var tagFilter = ""
     @Published var previewCacheBytes: Int64 = 0
+    @Published var projectOpenError: String?
     private var filmstripTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
     private var waveformTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var pendingProjectOpen: (data: Data, sourceURL: URL)?
+    private var activeScanID: UUID?
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
@@ -435,13 +439,57 @@ final class ClipStore: ObservableObject {
     /// folder DVR Studio can scan without copying or moving source footage.
     @discardableResult
     func openImportedURLs(_ urls: [URL]) -> Bool {
+        if urls.count == 1, let projectURL = urls.first,
+           EditProjectFile.isProjectURL(projectURL) {
+            openEditProject(at: projectURL)
+            return true
+        }
         guard let folder = Self.importFolder(for: urls) else {
-            statusMessage = "Drop a video file or folder containing recordings."
+            statusMessage = "Drop a video, project, or folder containing recordings."
             return false
         }
         sourceFolder = folder
         rescan()
         return true
+    }
+
+    /// Open a native edit document, locating a moved source when necessary.
+    /// The edit is applied only after the asynchronous library scan has created
+    /// the matching Clip object, keeping player and metadata state coherent.
+    func openEditProject(at projectURL: URL) {
+        do {
+            let data = try Data(contentsOf: projectURL)
+            let project = try EditProjectFile.project(from: data)
+            let recorded = URL(fileURLWithPath: project.sourcePath).standardizedFileURL
+            let sourceURL: URL
+            if FileManager.default.fileExists(atPath: recorded.path) {
+                sourceURL = recorded
+            } else {
+                let panel = NSOpenPanel()
+                panel.message = "Locate the recording for \(projectURL.lastPathComponent)"
+                panel.prompt = "Use Recording"
+                panel.allowedContentTypes = Self.videoExtensions.compactMap {
+                    UTType(filenameExtension: $0)
+                }
+                panel.allowsMultipleSelection = false
+                guard panel.runModal() == .OK, let replacement = panel.url else { return }
+                sourceURL = replacement.standardizedFileURL
+            }
+            guard Self.videoExtensions.contains(sourceURL.pathExtension.lowercased()) else {
+                throw EditProjectError.wrongSource(sourceURL.lastPathComponent)
+            }
+            pendingProjectOpen = (data, sourceURL)
+            let currentFolder = sourceFolder?.standardizedFileURL
+            if let currentFolder,
+               sourceURL.path.hasPrefix(currentFolder.path + "/") {
+                sourceFolder = currentFolder
+            } else {
+                sourceFolder = sourceURL.deletingLastPathComponent()
+            }
+            rescan()
+        } catch {
+            projectOpenError = error.localizedDescription
+        }
     }
 
     nonisolated static func importFolder(for urls: [URL]) -> URL? {
@@ -459,13 +507,16 @@ final class ClipStore: ObservableObject {
 
     func rescan() {
         guard let folder = sourceFolder else { return }
+        let scanID = UUID()
+        activeScanID = scanID
         UserDefaults.standard.set(folder.path, forKey: Self.lastFolderDefaultsKey)
         isScanning = true
         statusMessage = "Scanning \(folder.path)…"
         Task.detached { [weak self] in
             let files = Self.scanVideoFiles(in: folder)
             await MainActor.run { [weak self] in
-                guard let self else { return }
+                guard let self, self.activeScanID == scanID else { return }
+                self.activeScanID = nil
                 let existing = Dictionary(uniqueKeysWithValues: self.clips.map { ($0.url, $0) })
                 self.clips = files.map { file in
                     let clip = existing[file.url] ?? Clip(url: file.url, fileDate: file.fileDate)
@@ -475,11 +526,30 @@ final class ClipStore: ObservableObject {
                     return clip
                 }
                 self.isScanning = false
-                self.statusMessage = "\(files.count) clip\(files.count == 1 ? "" : "s")"
-                if let selected = self.selectedClip {
-                    if !self.clips.contains(selected) { self.selectedClip = self.clips.first }
+                if let pending = self.pendingProjectOpen {
+                    self.pendingProjectOpen = nil
+                    if let target = self.clips.first(where: {
+                        $0.url.standardizedFileURL == pending.sourceURL.standardizedFileURL
+                    }) {
+                        do {
+                            target.edit = try EditProjectFile.decode(pending.data, for: target)
+                            self.selectedClip = target
+                            self.statusMessage = "Opened edit project for \(target.name)"
+                        } catch {
+                            self.projectOpenError = error.localizedDescription
+                            self.statusMessage = "Couldn’t open edit project"
+                        }
+                    } else {
+                        self.projectOpenError = "The selected recording was not found in the scanned folder."
+                        self.statusMessage = "Couldn’t locate project recording"
+                    }
                 } else {
-                    self.selectedClip = self.clips.first
+                    self.statusMessage = "\(files.count) clip\(files.count == 1 ? "" : "s")"
+                    if let selected = self.selectedClip {
+                        if !self.clips.contains(selected) { self.selectedClip = self.clips.first }
+                    } else {
+                        self.selectedClip = self.clips.first
+                    }
                 }
                 self.loadMetadata()
             }

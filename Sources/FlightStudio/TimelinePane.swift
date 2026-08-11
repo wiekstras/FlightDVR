@@ -281,8 +281,8 @@ private struct TimelineEditor: View {
 
     private func saveProject() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = clip.url.deletingPathExtension().lastPathComponent + ".flightedit.json"
+        panel.allowedContentTypes = [.flightEditProject]
+        panel.nameFieldStringValue = clip.url.deletingPathExtension().lastPathComponent + ".flightedit"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try EditProjectFile.encode(clip: clip).write(to: url, options: .atomic)
@@ -293,7 +293,7 @@ private struct TimelineEditor: View {
 
     private func openProject() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.json]
+        panel.allowedContentTypes = [.flightEditProject, .json]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {

@@ -293,6 +293,12 @@ enum SelfTest {
         let projectClip = Clip(url: src)
         projectClip.edit = plan
         let projectData = try EditProjectFile.encode(clip: projectClip)
+        guard EditProjectFile.isProjectURL(URL(fileURLWithPath: "lap.flightedit")),
+              EditProjectFile.isProjectURL(URL(fileURLWithPath: "lap.flightedit.json")),
+              !EditProjectFile.isProjectURL(URL(fileURLWithPath: "lap.json")),
+              try EditProjectFile.project(from: projectData).sourcePath == src.path else {
+            throw Failure("native edit-project document routing was not deterministic")
+        }
         let loadedPlan = try EditProjectFile.decode(projectData, for: projectClip)
         guard loadedPlan == plan else {
             throw Failure("edit project did not round-trip")

@@ -1,4 +1,10 @@
 import Foundation
+import UniformTypeIdentifiers
+
+extension UTType {
+    static let flightEditProject = UTType(
+        exportedAs: "dev.flightstudio.edit-project", conformingTo: .json)
+}
 
 /// A portable, human-readable edit sidecar. It references the original clip
 /// rather than duplicating footage, so it is safe to keep beside DVR media or
@@ -25,6 +31,20 @@ enum EditProjectError: LocalizedError, Equatable {
 }
 
 enum EditProjectFile {
+    static func isProjectURL(_ url: URL) -> Bool {
+        let name = url.lastPathComponent.lowercased()
+        return url.pathExtension.lowercased() == "flightedit"
+            || name.hasSuffix(".flightedit.json")
+    }
+
+    static func project(from data: Data) throws -> EditProject {
+        let project = try JSONDecoder().decode(EditProject.self, from: data)
+        guard project.version == EditProject.currentVersion else {
+            throw EditProjectError.unsupportedVersion
+        }
+        return project
+    }
+
     static func encode(clip: Clip) throws -> Data {
         let project = EditProject(sourcePath: clip.url.path, edit: clip.edit)
         let encoder = JSONEncoder()
@@ -33,10 +53,7 @@ enum EditProjectFile {
     }
 
     static func decode(_ data: Data, for clip: Clip) throws -> EditPlan {
-        let project = try JSONDecoder().decode(EditProject.self, from: data)
-        guard project.version == EditProject.currentVersion else {
-            throw EditProjectError.unsupportedVersion
-        }
+        let project = try Self.project(from: data)
         let recordedSource = URL(fileURLWithPath: project.sourcePath).standardizedFileURL
         let selectedSource = clip.url.standardizedFileURL
         if recordedSource != selectedSource,

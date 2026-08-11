@@ -81,6 +81,14 @@ struct ContentView: View {
         .onOpenURL { url in
             _ = store.openImportedURLs([url])
         }
+        .alert("Couldn’t open edit project", isPresented: Binding(
+            get: { store.projectOpenError != nil },
+            set: { if !$0 { store.projectOpenError = nil } }
+        )) {
+            Button("OK", role: .cancel) { store.projectOpenError = nil }
+        } message: {
+            Text(store.projectOpenError ?? "")
+        }
     }
 }
 

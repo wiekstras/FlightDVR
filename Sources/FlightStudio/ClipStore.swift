@@ -255,7 +255,7 @@ final class ClipStore: ObservableObject {
     @Published var favoritesOnly = false
     @Published var tagFilter = ""
     @Published var previewCacheBytes: Int64 = 0
-    private var filmstripsInFlight: Set<URL> = []
+    private var filmstripTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
@@ -500,6 +500,8 @@ final class ClipStore: ObservableObject {
     }
 
     func clearPreviewCache() {
+        for entry in filmstripTasks.values { entry.task.cancel() }
+        filmstripTasks.removeAll()
         for url in Self.previewFiles() {
             try? FileManager.default.removeItem(at: url)
         }
@@ -558,30 +560,53 @@ final class ClipStore: ObservableObject {
     /// Lazily build a visual timeline only for clips the user opens. A library
     /// with thousands of recordings therefore pays no up-front filmstrip cost.
     func prepareTimelineFilmstrip(for clip: Clip) {
+        let obsolete = filmstripTasks.keys.filter { $0 != clip.url }
+        for url in obsolete {
+            filmstripTasks[url]?.task.cancel()
+            filmstripTasks[url] = nil
+        }
         guard clip.timelineFilmstrip == nil,
               let duration = clip.info?.duration, duration > 0,
-              !filmstripsInFlight.contains(clip.url) else { return }
+              filmstripTasks[clip.url] == nil else { return }
         let out = Self.cacheRoot.appendingPathComponent(
             "filmstrip-\(Self.cacheKey(for: clip.url)).jpg")
         if let cached = NSImage(contentsOf: out) {
             clip.timelineFilmstrip = cached
             return
         }
-        filmstripsInFlight.insert(clip.url)
         let clipURL = clip.url
-        Task.detached(priority: .utility) {
+        let taskID = UUID()
+        let staging = Self.cacheRoot.appendingPathComponent(
+            "filmstrip-work-\(taskID.uuidString).jpg")
+        let task = Task.detached(priority: .utility) {
             let args = TimelineFilmstripBuilder.command(
-                source: clip.url, duration: duration, output: out)
-            let generated = (try? FFmpeg.run(args)) != nil
-            if generated { Self.enforceCacheCap(keeping: out) }
+                source: clip.url, duration: duration, output: staging)
+            let generated: Bool
+            do {
+                _ = try FFmpeg.run(args, isCancelled: { Task.isCancelled })
+                generated = !Task.isCancelled
+            } catch {
+                generated = false
+                try? FileManager.default.removeItem(at: staging)
+            }
             await MainActor.run { [weak self, weak clip] in
-                self?.filmstripsInFlight.remove(clipURL)
+                guard self?.filmstripTasks[clipURL]?.id == taskID else {
+                    try? FileManager.default.removeItem(at: staging)
+                    return
+                }
+                self?.filmstripTasks[clipURL] = nil
+                if generated {
+                    try? FileManager.default.removeItem(at: out)
+                    try? FileManager.default.moveItem(at: staging, to: out)
+                }
                 if generated, let image = NSImage(contentsOf: out) {
                     clip?.timelineFilmstrip = image
+                    Task.detached { Self.enforceCacheCap(keeping: out) }
                     self?.refreshCacheSize()
                 }
             }
         }
+        filmstripTasks[clipURL] = (taskID, task)
     }
 
     // MARK: Preview cache (lossless remux so AVPlayer can open it)

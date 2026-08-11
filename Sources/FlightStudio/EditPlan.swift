@@ -36,14 +36,81 @@ struct EditPlan: Equatable {
         inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty && music == nil
     }
 
+    /// Returns a safe, deterministic version of an edit before it is rendered.
+    /// Imported or manually edited projects can otherwise contain negative times,
+    /// inverted ranges, or overlapping cuts that make ffmpeg reject the graph.
+    func sanitized(duration: Double) -> EditPlan {
+        guard duration.isFinite, duration > 0 else { return EditPlan() }
+        var result = self
+        result.inPoint = min(max(inPoint.isFinite ? inPoint : 0, 0), duration)
+        let requestedOut = outPoint ?? duration
+        let safeOut = requestedOut.isFinite ? requestedOut : duration
+        result.outPoint = min(max(safeOut, result.inPoint), duration)
+
+        let rangeEnd = result.outPoint ?? duration
+        let clampedCuts = cuts.compactMap { cut -> CutRange? in
+            let start = min(max(cut.start, result.inPoint), rangeEnd)
+            let end = min(max(cut.end, result.inPoint), rangeEnd)
+            return end - start > 0.05 ? CutRange(start: start, end: end) : nil
+        }.sorted { $0.start < $1.start }
+        var mergedCuts: [CutRange] = []
+        for cut in clampedCuts {
+            if var last = mergedCuts.last, cut.start <= last.end + 0.001 {
+                last.end = max(last.end, cut.end)
+                mergedCuts[mergedCuts.count - 1] = last
+            } else {
+                mergedCuts.append(cut)
+            }
+        }
+        result.cuts = mergedCuts
+
+        // Zones remain ordered as entered: for overlapping legacy zones the first
+        // one continues to win, matching the previous renderer's behaviour.
+        result.speedZones = speedZones.compactMap { zone -> SpeedZone? in
+            let start = min(max(zone.start, result.inPoint), rangeEnd)
+            let end = min(max(zone.end, result.inPoint), rangeEnd)
+            guard end - start > 0.05 else { return nil }
+            var cleaned = zone
+            cleaned.start = start
+            cleaned.end = end
+            cleaned.speed = min(max(zone.speed.isFinite ? zone.speed : 1, 0.25), 4)
+            cleaned.rampDuration = min(max(zone.rampDuration.isFinite ? zone.rampDuration : 0, 0), (end - start) / 2)
+            return cleaned
+        }
+        if let music = music, !music.url.path.isEmpty {
+            var cleaned = music
+            cleaned.volume = min(max(music.volume.isFinite ? music.volume : 0.8, 0), 1)
+            cleaned.fadeIn = max(music.fadeIn.isFinite ? music.fadeIn : 0, 0)
+            cleaned.fadeOut = max(music.fadeOut.isFinite ? music.fadeOut : 0, 0)
+            result.music = cleaned
+        } else {
+            result.music = nil
+        }
+        return result
+    }
+
+    /// A human-readable reason an edit cannot produce any video.
+    func validationError(duration: Double) -> String? {
+        guard duration.isFinite, duration > 0 else { return "The clip has no usable duration." }
+        let safe = sanitized(duration: duration)
+        guard safe.effectiveOut(duration: duration) - safe.inPoint > 0.05 else {
+            return "The trim out point must be after the trim in point."
+        }
+        guard !safe.resolvedSegments(duration: duration).isEmpty else {
+            return "Cuts remove the entire trimmed clip."
+        }
+        return nil
+    }
+
     func effectiveOut(duration: Double) -> Double { min(outPoint ?? duration, duration) }
 
     /// Source-time segments that survive the cuts, in order.
     func keptRanges(duration: Double) -> [(Double, Double)] {
-        let out = effectiveOut(duration: duration)
-        guard out > inPoint else { return [] }
-        var kept: [(Double, Double)] = [(inPoint, out)]
-        for cut in cuts.sorted(by: { $0.start < $1.start }) {
+        let safe = sanitized(duration: duration)
+        let out = safe.effectiveOut(duration: duration)
+        guard out > safe.inPoint else { return [] }
+        var kept: [(Double, Double)] = [(safe.inPoint, out)]
+        for cut in safe.cuts {
             var next: [(Double, Double)] = []
             for (a, b) in kept {
                 let cs = max(cut.start, a), ce = min(cut.end, b)
@@ -84,9 +151,10 @@ struct EditPlan: Equatable {
     /// ramp, so ramps become short steps — at 8+ steps over half a second the
     /// result reads as smooth.
     func resolvedSegments(duration: Double, rampSteps: Int = 10) -> [(start: Double, end: Double, speed: Double)] {
+        let safe = sanitized(duration: duration)
         var boundaries: Set<Double> = []
-        for (a, b) in keptRanges(duration: duration) { boundaries.insert(a); boundaries.insert(b) }
-        for z in speedZones {
+        for (a, b) in safe.keptRanges(duration: duration) { boundaries.insert(a); boundaries.insert(b) }
+        for z in safe.speedZones {
             let ramp = min(z.rampDuration, (z.end - z.start) / 2)
             boundaries.insert(z.start); boundaries.insert(z.end)
             if ramp > 0.01 {
@@ -97,12 +165,12 @@ struct EditPlan: Equatable {
             }
         }
         var segments: [(Double, Double, Double)] = []
-        for (a, b) in keptRanges(duration: duration) {
+        for (a, b) in safe.keptRanges(duration: duration) {
             let cutPoints = ([a, b] + boundaries.filter { $0 > a && $0 < b }).sorted()
             for i in 0..<(cutPoints.count - 1) {
                 let s = cutPoints[i], e = cutPoints[i + 1]
                 guard e - s > 0.005 else { continue }
-                segments.append((s, e, speed(at: (s + e) / 2)))
+                segments.append((s, e, safe.speed(at: (s + e) / 2)))
             }
         }
         // Merge neighbours with (near) identical speed to keep the graph small.
@@ -173,6 +241,7 @@ enum FilterGraphBuilder {
     /// Input 0 is the clip; input 1 (optional) is the music file.
     static func build(plan: EditPlan, duration: Double, sourceHasAudio: Bool,
                       fixColorRange: Bool) -> Graph {
+        let plan = plan.sanitized(duration: duration)
         let segs = plan.resolvedSegments(duration: duration)
         precondition(!segs.isEmpty, "empty edit")
         let outDur = plan.outputDuration(duration: duration)

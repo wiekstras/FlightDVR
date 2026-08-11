@@ -153,6 +153,9 @@ final class ExportQueue: ObservableObject {
         }
         let plan = job.clip.edit
         let settings = job.settings
+        if let error = plan.validationError(duration: info.duration) {
+            throw FFmpeg.ProcessError(command: "export", stderr: error)
+        }
         let outDur = max(plan.outputDuration(duration: info.duration), 0.01)
 
         // Overwrite protection: exports never silently replace an existing file.

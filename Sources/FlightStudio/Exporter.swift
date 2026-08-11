@@ -180,8 +180,16 @@ struct ExportSettings: Codable, Equatable {
 enum OutputNamer {
     static func safeBaseName(_ name: String, fallback: String = "Untitled clip") -> String {
         let illegal = CharacterSet(charactersIn: "/:").union(.controlCharacters)
-        let cleaned = name.components(separatedBy: illegal).joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var normalized = ""
+        for scalar in name.unicodeScalars {
+            if illegal.contains(scalar) {
+                if !normalized.isEmpty, normalized.last != "-" { normalized.append("-") }
+            } else {
+                normalized.unicodeScalars.append(scalar)
+            }
+        }
+        let edges = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "-."))
+        let cleaned = normalized.trimmingCharacters(in: edges)
         return String((cleaned.isEmpty ? fallback : cleaned).prefix(180))
     }
 

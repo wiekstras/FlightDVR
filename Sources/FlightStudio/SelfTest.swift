@@ -301,7 +301,7 @@ enum SelfTest {
                                           fileExists: { $0 == first || $0 == second })
         guard first.lastPathComponent == "flight.mp4", second.lastPathComponent == "flight 2.mp4",
               third.lastPathComponent == "flight 3.mp4",
-              OutputNamer.safeBaseName(" Final/Lap:\n ") == "Final-Lap-" else {
+              OutputNamer.safeBaseName(" Final/Lap:\n ") == "Final-Lap" else {
             throw Failure("output-name collision handling is not deterministic")
         }
         print("output naming ok")

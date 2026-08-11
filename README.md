@@ -16,7 +16,9 @@ it, and add eased speed ramps.
   length or size.
   Finder folders and supported video files can also be dropped directly onto
   the window or opened with DVR Studio. Superseded folder scans are ignored so
-  stale removable-drive results cannot overwrite the current library.
+  stale removable-drive results cannot overwrite the current library. Probe
+  metadata is cached across launches and invalidates automatically when a file
+  moves, changes size, or is modified.
 - **Manage** — move clips to the Trash (always recoverable, never hard-deleted)
   from the right-click menu, the Delete key, or Clips → Move Ticked to Trash.
 - **Preview natively** — `.ts` files are losslessly remuxed into a cache with the

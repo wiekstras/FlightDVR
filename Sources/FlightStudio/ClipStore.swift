@@ -54,6 +54,65 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
     }
 }
 
+/// Durable probe results for unchanged media. The key includes path, byte size,
+/// and modification date, so recordings still being written invalidate safely.
+final class MediaMetadataCache: @unchecked Sendable {
+    static let shared = MediaMetadataCache()
+    static let defaultURL = ClipStore.cacheRoot.appendingPathComponent("media-metadata-v1.json")
+
+    private struct Record: Codable {
+        var info: ClipInfo
+        var storedAt: Date
+    }
+
+    private let url: URL
+    private let lock = NSLock()
+    private var records: [String: Record]
+
+    init(url: URL = MediaMetadataCache.defaultURL) {
+        self.url = url
+        if let data = try? Data(contentsOf: url),
+           let decoded = try? JSONDecoder().decode([String: Record].self, from: data) {
+            records = decoded
+        } else {
+            records = [:]
+        }
+    }
+
+    func info(for key: String) -> ClipInfo? {
+        lock.lock()
+        defer { lock.unlock() }
+        return records[key]?.info
+    }
+
+    func store(_ info: ClipInfo, for key: String) {
+        lock.lock()
+        records[key] = Record(info: info, storedAt: Date())
+        lock.unlock()
+    }
+
+    func flush(maxRecords: Int = 20_000) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let limit = max(maxRecords, 1)
+        if records.count > limit {
+            let keep = Set(records.sorted { $0.value.storedAt > $1.value.storedAt }
+                .prefix(limit).map(\.key))
+            records = records.filter { keep.contains($0.key) }
+        }
+        let snapshot = records
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try JSONEncoder().encode(snapshot).write(to: url, options: .atomic)
+    }
+
+    var recordCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return records.count
+    }
+}
+
 final class Clip: ObservableObject, Identifiable, Hashable {
     private static let filenameDateRegex = try? NSRegularExpression(
         pattern: #"(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})(?:[-_ T.]?(\d{2})[-_.:]?(\d{2})[-_.:]?(\d{2}))?"#
@@ -253,6 +312,7 @@ enum SortOrder: String, CaseIterable, Identifiable {
 struct ScannedVideoFile: Equatable, Sendable {
     var url: URL
     var fileDate: Date
+    var cachedInfo: ClipInfo?
 }
 
 enum TimelineFilmstripBuilder {
@@ -350,7 +410,7 @@ final class ClipStore: ObservableObject {
         return base
     }()
 
-    nonisolated private static func cacheKey(for url: URL) -> String {
+    nonisolated static func mediaCacheKey(for url: URL) -> String {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         let size = attrs?[.size] as? Int64 ?? 0
         let modified = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
@@ -391,7 +451,9 @@ final class ClipStore: ObservableObject {
     /// is constructing thousands of observable Clip objects on the main actor.
     nonisolated static func scanVideoFiles(in folder: URL, maxDepth: Int = 5) -> [ScannedVideoFile] {
         findVideoFiles(in: folder, maxDepth: maxDepth).map {
-            ScannedVideoFile(url: $0, fileDate: Clip.readFileDate(for: $0))
+            let key = mediaCacheKey(for: $0)
+            return ScannedVideoFile(url: $0, fileDate: Clip.readFileDate(for: $0),
+                                    cachedInfo: MediaMetadataCache.shared.info(for: key))
         }
     }
 
@@ -520,6 +582,7 @@ final class ClipStore: ObservableObject {
                 let existing = Dictionary(uniqueKeysWithValues: self.clips.map { ($0.url, $0) })
                 self.clips = files.map { file in
                     let clip = existing[file.url] ?? Clip(url: file.url, fileDate: file.fileDate)
+                    if clip.info == nil { clip.info = file.cachedInfo }
                     clip.relativeName = file.url.path.hasPrefix(folder.path + "/")
                         ? String(file.url.path.dropFirst(folder.path.count + 1))
                         : file.url.lastPathComponent
@@ -569,15 +632,22 @@ final class ClipStore: ObservableObject {
     /// concurrent ffmpeg processes fighting over one USB card reader is slower
     /// than a small pool, not faster.
     private func loadMetadata() {
-        let pending = clips.filter { $0.info == nil }
+        let pending = clips.filter { $0.info == nil || $0.thumbnail == nil }
+            .map { (clip: $0, cachedInfo: $0.info) }
         guard !pending.isEmpty else { return }
+        let needsCacheFlush = pending.contains { $0.cachedInfo == nil }
         Task.detached(priority: .utility) {
             await withTaskGroup(of: Void.self) { group in
                 var iterator = pending.makeIterator()
                 func addNext(_ group: inout TaskGroup<Void>) -> Bool {
-                    guard let clip = iterator.next() else { return false }
+                    guard let item = iterator.next() else { return false }
                     group.addTask {
-                        let info = try? Probe.probe(clip.url)
+                        let clip = item.clip
+                        let info = item.cachedInfo ?? (try? Probe.probe(clip.url))
+                        if item.cachedInfo == nil, let info {
+                            MediaMetadataCache.shared.store(
+                                info, for: Self.mediaCacheKey(for: clip.url))
+                        }
                         let thumb = Self.extractThumbnail(for: clip.url, duration: info?.duration ?? 0)
                         await MainActor.run {
                             clip.info = info
@@ -591,6 +661,7 @@ final class ClipStore: ObservableObject {
                     _ = addNext(&group)
                 }
             }
+            if needsCacheFlush { try? MediaMetadataCache.shared.flush() }
         }
     }
 
@@ -690,7 +761,7 @@ final class ClipStore: ObservableObject {
     // MARK: Thumbnails
 
     nonisolated private static func extractThumbnail(for url: URL, duration: Double) -> NSImage? {
-        let out = cacheRoot.appendingPathComponent("thumb-\(cacheKey(for: url)).jpg")
+        let out = cacheRoot.appendingPathComponent("thumb-\(mediaCacheKey(for: url)).jpg")
         if !FileManager.default.fileExists(atPath: out.path) {
             // Seek a third of the way in (past the bench-sitting), then decode a couple of
             // dozen frames before grabbing one: seeking into MPEG-TS lands on an estimated
@@ -719,7 +790,7 @@ final class ClipStore: ObservableObject {
               let duration = clip.info?.duration, duration > 0,
               filmstripTasks[clip.url] == nil else { return }
         let out = Self.cacheRoot.appendingPathComponent(
-            "filmstrip-\(Self.cacheKey(for: clip.url)).jpg")
+            "filmstrip-\(Self.mediaCacheKey(for: clip.url)).jpg")
         if let cached = NSImage(contentsOf: out) {
             clip.timelineFilmstrip = cached
             return
@@ -771,7 +842,7 @@ final class ClipStore: ObservableObject {
               clip.info?.hasAudio == true,
               waveformTasks[clip.url] == nil else { return }
         let out = Self.cacheRoot.appendingPathComponent(
-            "waveform-\(Self.cacheKey(for: clip.url)).png")
+            "waveform-\(Self.mediaCacheKey(for: clip.url)).png")
         if let cached = NSImage(contentsOf: out) {
             clip.timelineWaveform = cached
             return
@@ -824,7 +895,7 @@ final class ClipStore: ObservableObject {
             completion(clip.url)
             return
         }
-        let out = Self.cacheRoot.appendingPathComponent("preview-\(Self.cacheKey(for: clip.url)).mp4")
+        let out = Self.cacheRoot.appendingPathComponent("preview-\(Self.mediaCacheKey(for: clip.url)).mp4")
         if FileManager.default.fileExists(atPath: out.path) {
             clip.previewURL = out
             completion(out)

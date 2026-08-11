@@ -117,6 +117,29 @@ enum SelfTest {
         guard info.hasAudio else { throw Failure("probe missed the audio stream") }
         print("probe ok: \(info.width)x\(info.height) \(info.videoCodec) \(info.duration)s range=\(info.colorRange ?? "?")")
 
+        let metadataJournal = workDir.appendingPathComponent("metadata-cache-test.json")
+        try? FileManager.default.removeItem(at: metadataJournal)
+        let metadataCache = MediaMetadataCache(url: metadataJournal)
+        metadataCache.store(info, for: "stable-media")
+        try metadataCache.flush()
+        guard MediaMetadataCache(url: metadataJournal).info(for: "stable-media") == info else {
+            throw Failure("media metadata cache did not survive a relaunch")
+        }
+        metadataCache.store(info, for: "second")
+        metadataCache.store(info, for: "third")
+        try metadataCache.flush(maxRecords: 2)
+        guard metadataCache.recordCount == 2 else {
+            throw Failure("media metadata cache did not enforce its record cap")
+        }
+        let identityFile = workDir.appendingPathComponent("identity-test.bin")
+        try Data("short".utf8).write(to: identityFile, options: .atomic)
+        let firstIdentity = ClipStore.mediaCacheKey(for: identityFile)
+        try Data("a meaningfully longer payload".utf8).write(to: identityFile, options: .atomic)
+        guard ClipStore.mediaCacheKey(for: identityFile) != firstIdentity else {
+            throw Failure("changed media did not invalidate its cached metadata")
+        }
+        print("durable media metadata cache ok")
+
         guard Probe.frameRate(from: "60000/1001").map({ abs($0 - 59.94) < 0.01 }) == true,
               Probe.frameRate(from: "0/0") == nil, Probe.frameRate(from: "bogus") == nil else {
             throw Failure("frame-rate parsing mishandled ffprobe values")

@@ -125,7 +125,7 @@ enum FFmpeg {
 
 // MARK: - Probing
 
-struct ClipInfo: Equatable, Codable {
+struct ClipInfo: Equatable, Codable, Sendable {
     var duration: Double
     var width: Int
     var height: Int

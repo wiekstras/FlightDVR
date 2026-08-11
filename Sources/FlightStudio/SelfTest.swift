@@ -123,7 +123,15 @@ enum SelfTest {
         guard Clip(url: src).tags == ["race"] else {
             throw Failure("tag metadata was not persisted or deduplicated")
         }
-        print("favorite persistence ok")
+        favoriteClip.edit = EditPlan(inPoint: 1.5,
+                                     markers: [TimelineMarker(time: 2, name: "Recovered")])
+        favoriteClip.favorite = false // also flushes the coalesced edit draft
+        let recoveredClip = Clip(url: src)
+        guard recoveredClip.edit.inPoint == 1.5,
+              recoveredClip.edit.markers.first?.name == "Recovered" else {
+            throw Failure("automatic edit draft was not recovered")
+        }
+        print("library metadata and edit recovery ok")
 
         // 3c. Invalid timeline data is normalised before it can reach ffmpeg.
         var messy = EditPlan(inPoint: -2, outPoint: 99,

@@ -5,6 +5,7 @@ import CryptoKit
 private struct ClipLibraryRecord: Codable {
     var favorite = false
     var tags: [String] = []
+    var edit: EditPlan? = nil
 }
 
 private enum ClipLibraryMetadata {
@@ -42,6 +43,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
             undoEdits.append(oldValue)
             if undoEdits.count > 100 { undoEdits.removeFirst(undoEdits.count - 100) }
             redoEdits.removeAll()
+            scheduleEditPersistence()
         }
     }
     @Published var relativeName: String = ""   // path relative to the scanned folder
@@ -57,6 +59,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     private var undoEdits: [EditPlan] = []
     private var redoEdits: [EditPlan] = []
     private var restoringEdit = false
+    private var editSaveWorkItem: DispatchWorkItem?
 
     let fileDate: Date           // the filesystem's story
     let parsedDate: Date?        // a date found in the filename, which we trust more
@@ -71,6 +74,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         let record = ClipLibraryMetadata.record(for: url)
         self.favorite = record.favorite
         self.tags = record.tags
+        self.edit = record.edit ?? EditPlan()
     }
 
     var name: String { url.lastPathComponent }
@@ -83,6 +87,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         redoEdits.append(edit)
         edit = previous
         restoringEdit = false
+        persistLibraryRecord()
     }
 
     func redoEdit() {
@@ -91,6 +96,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         undoEdits.append(edit)
         edit = next
         restoringEdit = false
+        persistLibraryRecord()
     }
 
     func clearEditHistory() {
@@ -110,7 +116,21 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     }
 
     private func persistLibraryRecord() {
-        ClipLibraryMetadata.save(ClipLibraryRecord(favorite: favorite, tags: tags), for: url)
+        editSaveWorkItem?.cancel()
+        let savedEdit = edit.isDefault && edit.markers.isEmpty ? nil : edit
+        ClipLibraryMetadata.save(
+            ClipLibraryRecord(favorite: favorite, tags: tags, edit: savedEdit),
+            for: url
+        )
+    }
+
+    /// Timeline drags and sliders can publish dozens of changes per second.
+    /// Coalesce those writes so editing never repeatedly rewrites library data.
+    private func scheduleEditPersistence() {
+        editSaveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.persistLibraryRecord() }
+        editSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
     }
     /// Best guess at when this was flown: a date embedded in the filename wins,
     /// otherwise the file's own date.

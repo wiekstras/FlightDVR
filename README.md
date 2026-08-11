@@ -28,6 +28,8 @@ it, and add eased speed ramps.
     choice of mixing under the clip audio or replacing it
   - **project files** — save an edit as a portable `.flightedit.json` sidecar
     and reopen it later without copying the source footage
+  - **automatic recovery** — every edit is also saved as a local draft as it is
+    made, so switching clips or relaunching the app does not lose work
   - **Preview edit** — a toggle in the player plays the clip with cuts, ramps
     and music applied, via an AVComposition over the preview cache: instant,
     no encoding, and it follows every change live

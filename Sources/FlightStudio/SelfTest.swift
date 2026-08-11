@@ -157,7 +157,17 @@ enum SelfTest {
         }
         print("edit history ok")
 
-        // 3f. Queued and on-disk name collisions receive predictable suffixes.
+        // 3f. Markers persist and are clamped to the editable source range.
+        let marked = EditPlan(inPoint: 1, outPoint: 9,
+                              markers: [TimelineMarker(time: -1, name: " Start "),
+                                        TimelineMarker(time: 12, name: "Finish")])
+            .sanitized(duration: info.duration)
+        guard marked.markers.map(\.time) == [1, 9], marked.markers[0].name == "Start" else {
+            throw Failure("timeline markers were not sanitised")
+        }
+        print("timeline markers ok")
+
+        // 3g. Queued and on-disk name collisions receive predictable suffixes.
         let exportFolder = workDir.appendingPathComponent("exports", isDirectory: true)
         let first = OutputNamer.uniqueURL(in: exportFolder, baseName: "flight", fileExtension: "mp4",
                                           fileExists: { _ in false })
@@ -171,7 +181,7 @@ enum SelfTest {
         }
         print("output naming ok")
 
-        // 3g. Source↔output time mapping must round-trip through cuts and ramps.
+        // 3h. Source↔output time mapping must round-trip through cuts and ramps.
         for t in stride(from: plan.inPoint, to: 9.0, by: 0.25) {
             // Cut interiors and their boundaries legitimately collapse to one output time.
             let inCut = plan.cuts.contains { t >= $0.start && t <= $0.end }

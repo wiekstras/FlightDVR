@@ -179,6 +179,16 @@ final class ExportQueue: ObservableObject {
         job.state = .waiting
     }
 
+    /// Move a waiting export relative to the other waiting jobs. Completed and
+    /// failed entries stay in place so their status remains easy to inspect.
+    func moveWaiting(_ job: ExportJob, by offset: Int) {
+        let waitingIndices = jobs.indices.filter { jobs[$0].state == .waiting }
+        guard let current = waitingIndices.firstIndex(where: { jobs[$0].id == job.id }) else { return }
+        let destination = current + offset
+        guard waitingIndices.indices.contains(destination) else { return }
+        jobs.swapAt(waitingIndices[current], waitingIndices[destination])
+    }
+
     func start() {
         guard !isRunning else { return }
         isRunning = true

@@ -106,6 +106,10 @@ struct ExportPane: View {
                         Button("Clear finished") { queue.clearFinished() }
                             .controlSize(.small)
                             .disabled(queue.jobs.isEmpty)
+                        if queue.isRunning || queue.jobs.contains(where: { $0.state == .waiting }) {
+                            Button("Cancel all") { queue.cancelAll() }
+                                .controlSize(.small)
+                        }
                     }
                 }
             }

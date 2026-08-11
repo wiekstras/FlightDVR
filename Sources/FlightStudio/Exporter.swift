@@ -146,6 +146,21 @@ final class ExportQueue: ObservableObject {
 
     func cancel(_ job: ExportJob) { job.cancelFlag = true }
 
+    /// Stop the active encode and prevent all queued exports from starting.
+    func cancelAll() {
+        for job in jobs {
+            switch job.state {
+            case .running:
+                job.cancelFlag = true
+            case .waiting:
+                job.cancelFlag = true
+                job.state = .cancelled
+            case .done, .cancelled, .failed:
+                break
+            }
+        }
+    }
+
     /// Put a cancelled or failed job back in the queue without making the user
     /// reselect its clip and export settings.
     func retry(_ job: ExportJob) {

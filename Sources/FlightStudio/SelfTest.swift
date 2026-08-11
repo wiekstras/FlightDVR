@@ -297,6 +297,25 @@ enum SelfTest {
         guard loadedPlan == plan else {
             throw Failure("edit project did not round-trip")
         }
+        var rejectedWrongProjectSource = false
+        do {
+            _ = try EditProjectFile.decode(projectData, for: Clip(url: nestedClip))
+        } catch let error as EditProjectError {
+            guard error == .wrongSource("hdz_001.ts") else {
+                throw Failure("project source validation returned an unclear error: \(error)")
+            }
+            rejectedWrongProjectSource = true
+        } catch {
+            throw Failure("project source validation returned an unclear error: \(error)")
+        }
+        let movedProject = EditProject(
+            sourcePath: workDir.appendingPathComponent("moved-source.ts").path,
+            edit: plan)
+        let movedProjectData = try JSONEncoder().encode(movedProject)
+        guard rejectedWrongProjectSource,
+              try EditProjectFile.decode(movedProjectData, for: projectClip) == plan else {
+            throw Failure("project source validation rejected recovery or accepted the wrong recording")
+        }
         print("edit project ok")
 
         // 3e. Every non-destructive edit can be undone and redone.

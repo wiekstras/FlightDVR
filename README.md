@@ -41,7 +41,8 @@ it, and add eased speed ramps.
   - **timed titles** at the top, centre or bottom, previewed live and burned into export
   - social reframing with full-frame padding, edge-to-edge crop, or a blurred background
   - **project files** — save an edit as a portable `.flightedit.json` sidecar
-    and reopen it later without copying the source footage
+    and reopen it later without copying the source footage; obvious wrong-source
+    loads are rejected while renamed or relocated recordings remain recoverable
   - **automatic recovery** — every edit is also saved as a local draft as it is
     made, so switching clips or relaunching the app does not lose work
   - **saved highlight shelf** — preserve and name several independent edits from

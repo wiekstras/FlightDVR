@@ -54,6 +54,23 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
     }
 }
 
+private final class MetadataLoadToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+}
+
 final class Clip: ObservableObject, Identifiable, Hashable {
     private static let filenameDateRegex = try? NSRegularExpression(
         pattern: #"(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})(?:[-_ T.]?(\d{2})[-_.:]?(\d{2})[-_.:]?(\d{2}))?"#
@@ -310,7 +327,7 @@ final class ClipStore: ObservableObject {
     private var waveformTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
     private var pendingProjectOpen: (data: Data, sourceURL: URL)?
     private var activeScanID: UUID?
-    private var metadataLoadTask: (id: UUID, task: Task<Void, Never>)?
+    private var metadataLoadToken: MetadataLoadToken?
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
@@ -510,8 +527,8 @@ final class ClipStore: ObservableObject {
         guard let folder = sourceFolder else { return }
         let scanID = UUID()
         activeScanID = scanID
-        metadataLoadTask?.task.cancel()
-        metadataLoadTask = nil
+        metadataLoadToken?.cancel()
+        metadataLoadToken = nil
         UserDefaults.standard.set(folder.path, forKey: Self.lastFolderDefaultsKey)
         isScanning = true
         statusMessage = "Scanning \(folder.path)…"
@@ -574,21 +591,22 @@ final class ClipStore: ObservableObject {
     private func loadMetadata() {
         let pending = clips.filter { $0.info == nil }
         guard !pending.isEmpty else { return }
-        metadataLoadTask?.task.cancel()
-        let taskID = UUID()
-        let task: Task<Void, Never> = Task.detached(priority: .utility) { [weak self] in
+        metadataLoadToken?.cancel()
+        let token = MetadataLoadToken()
+        metadataLoadToken = token
+        Task.detached(priority: .utility) { [weak self] in
             await withTaskGroup(of: Void.self) { group in
                 var iterator = pending.makeIterator()
                 func addNext(_ group: inout TaskGroup<Void>) -> Bool {
-                    guard !Task.isCancelled, let clip = iterator.next() else { return false }
+                    guard !token.isCancelled, let clip = iterator.next() else { return false }
                     group.addTask {
-                        guard !Task.isCancelled else { return }
+                        guard !token.isCancelled else { return }
                         let info = try? Probe.probe(clip.url)
-                        guard !Task.isCancelled else { return }
+                        guard !token.isCancelled else { return }
                         let thumb = Self.extractThumbnail(for: clip.url, duration: info?.duration ?? 0)
-                        guard !Task.isCancelled else { return }
+                        guard !token.isCancelled else { return }
                         await MainActor.run {
-                            guard self?.metadataLoadTask?.id == taskID else { return }
+                            guard self?.metadataLoadToken === token else { return }
                             clip.info = info
                             clip.thumbnail = thumb
                         }
@@ -601,11 +619,10 @@ final class ClipStore: ObservableObject {
                 }
             }
             await MainActor.run { [weak self] in
-                guard self?.metadataLoadTask?.id == taskID else { return }
-                self?.metadataLoadTask = nil
+                guard self?.metadataLoadToken === token else { return }
+                self?.metadataLoadToken = nil
             }
         }
-        metadataLoadTask = (taskID, task)
     }
 
     // MARK: File management

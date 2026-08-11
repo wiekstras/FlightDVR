@@ -355,7 +355,7 @@ enum MediaCacheFiles {
 
     static func isEvictable(_ url: URL) -> Bool {
         guard !url.lastPathComponent.contains("-work-") else { return false }
-        evictablePrefixes.contains { url.lastPathComponent.hasPrefix($0) }
+        return evictablePrefixes.contains { url.lastPathComponent.hasPrefix($0) }
     }
 
     static func evictableFiles(in folder: URL) -> [URL] {

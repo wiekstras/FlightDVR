@@ -686,7 +686,13 @@ final class ExportQueue: ObservableObject {
         let commands = ExportCommandBuilder.build(
             plan: plan, settings: settings, info: info,
             source: job.clip.url, output: job.stagingURL, jobID: job.id)
-        defer { try? FileManager.default.removeItem(at: ExportCommandBuilder.titleAssetURL(jobID: job.id)) }
+        let titleAssetCount = plan.sanitized(duration: info.duration).titleOverlays.count
+        defer {
+            for index in 0..<titleAssetCount {
+                try? FileManager.default.removeItem(
+                    at: ExportCommandBuilder.titleAssetURL(jobID: job.id, index: index))
+            }
+        }
         let passes = Double(commands.count)
         for (index, args) in commands.enumerated() {
             let passBase = Double(index) / passes
@@ -744,8 +750,8 @@ final class ExportQueue: ObservableObject {
 /// Turns a clip + edit plan + settings into complete ffmpeg invocations.
 /// Pure and headless, so the GUI queue and --selftest share the same path.
 enum ExportCommandBuilder {
-    static func titleAssetURL(jobID: UUID) -> URL {
-        ClipStore.cacheRoot.appendingPathComponent("title-\(jobID.uuidString).png")
+    static func titleAssetURL(jobID: UUID, index: Int = 0) -> URL {
+        ClipStore.cacheRoot.appendingPathComponent("title-\(jobID.uuidString)-\(index).png")
     }
 
     /// One or two (two-pass social) complete ffmpeg invocations for a job.
@@ -774,16 +780,18 @@ enum ExportCommandBuilder {
         if let music = safePlan.music {
             inputs += ["-stream_loop", "-1", "-i", music.url.path]
         }
-        var titleInputIndex: Int?
-        if let title = safePlan.title {
-            let url = titleAssetURL(jobID: jobID)
+        var titleInputIndices: [Int] = []
+        var nextInputIndex = safePlan.music == nil ? 1 : 2
+        for (titleIndex, title) in safePlan.titleOverlays.enumerated() {
+            let url = titleAssetURL(jobID: jobID, index: titleIndex)
             let canvas = settings.preset == .social
                 ? settings.socialProfile.canvasSize : (info.width, info.height)
             _ = TitleImageRenderer.write(title.text, canvasWidth: canvas.0,
                                          canvasHeight: canvas.1, to: url)
             // Always include the expected asset. A filesystem/rendering failure
             // then produces an explicit failed job instead of silently omitting text.
-            titleInputIndex = safePlan.music == nil ? 1 : 2
+            titleInputIndices.append(nextInputIndex)
+            nextInputIndex += 1
             inputs += ["-loop", "1", "-i", url.path]
         }
         let graph = FilterGraphBuilder.build(plan: effectivePlan, duration: info.duration,
@@ -794,7 +802,7 @@ enum ExportCommandBuilder {
                                                     framing: settings.socialFraming,
                                                     positionX: settings.cropPositionX,
                                                     positionY: settings.cropPositionY) : nil,
-                                             titleInputIndex: titleInputIndex)
+                                             titleInputIndices: titleInputIndices)
 
         var common: [String] = ["-y"] + inputs + ["-filter_complex", graph.filterComplex,
                                                   "-map", "[\(graph.videoLabel)]"]

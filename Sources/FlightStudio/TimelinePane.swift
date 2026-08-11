@@ -341,66 +341,114 @@ private struct TitleControls: View {
 
     var body: some View {
         Button {
-            if clip.edit.title == nil {
-                let out = clip.edit.effectiveOut(duration: duration)
-                let start = min(max(player.currentSourceTime, clip.edit.inPoint),
-                                max(clip.edit.inPoint, out - 0.05))
-                let end = min(start + 3, out)
-                clip.edit.title = TitleOverlay(text: "Title", start: start,
-                                               end: end)
-            }
+            migrateLegacyTitle()
+            if titles.isEmpty { addTitle() }
             showingInspector.toggle()
         } label: {
-            Label(clip.edit.title == nil ? "Add…" : "Edit…", systemImage: "textformat")
+            Label(titles.isEmpty ? "Add…" : "\(titles.count)…", systemImage: "textformat")
         }
         .disabled(duration <= 0)
         .popover(isPresented: $showingInspector, arrowEdge: .bottom) {
-            if clip.edit.title != nil {
+            if !titles.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
-                    Eyebrow("Timed Title")
-                    TextField("Title", text: titleBinding(\.text))
-                    Picker("Position", selection: titleBinding(\.position)) {
-                        ForEach(TitlePosition.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    LabeledContent("Visible") {
-                        Text("\(timecode(clip.edit.title?.start ?? 0))–\(timecode(clip.edit.title?.end ?? 0))")
-                            .font(.caption.monospacedDigit())
-                    }
                     HStack {
-                        Button("Set Start") {
-                            let out = clip.edit.effectiveOut(duration: duration)
-                            clip.edit.title?.start = min(max(player.currentSourceTime,
-                                                             clip.edit.inPoint), max(clip.edit.inPoint, out - 0.05))
-                            clip.edit.title?.end = min(out, max(clip.edit.title?.end ?? 0,
-                                                                (clip.edit.title?.start ?? 0) + 0.05))
-                        }
-                        Button("Set End") {
-                            let start = clip.edit.title?.start ?? clip.edit.inPoint
-                            clip.edit.title?.end = min(max(player.currentSourceTime,
-                                                           start + 0.05),
-                                                       clip.edit.effectiveOut(duration: duration))
-                        }
+                        Eyebrow("Timed Titles · \(titles.count)")
+                        Spacer()
+                        Button("Add Title") { addTitle() }
                     }
-                    Button("Remove title", role: .destructive) {
-                        clip.edit.title = nil
-                        showingInspector = false
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            ForEach(titles.indices, id: \.self) { index in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    TextField("Title", text: titleBinding(index, \.text))
+                                    Picker("Position", selection: titleBinding(index, \.position)) {
+                                        ForEach(TitlePosition.allCases) { Text($0.rawValue).tag($0) }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    HStack {
+                                        Text("\(timecode(titles[index].start))–\(timecode(titles[index].end))")
+                                            .font(.caption.monospacedDigit())
+                                            .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Button("Set Start") { setStart(index) }
+                                        Button("Set End") { setEnd(index) }
+                                        Button(role: .destructive) { removeTitle(index) } label: {
+                                            Image(systemName: "trash")
+                                        }
+                                        .help("Remove title")
+                                    }
+                                }
+                                if index < titles.count - 1 { Divider() }
+                            }
+                        }
                     }
                 }
                 .controlSize(.small)
                 .padding(14)
-                .frame(width: 300)
+                .frame(width: 390, height: min(CGFloat(titles.count) * 125 + 55, 430))
             }
         }
     }
 
-    private func titleBinding<Value>(_ keyPath: WritableKeyPath<TitleOverlay, Value>) -> Binding<Value> {
+    private var titles: [TitleOverlay] { clip.edit.titleOverlays }
+
+    private func setTitles(_ values: [TitleOverlay]) {
+        var edit = clip.edit
+        edit.title = nil
+        edit.titles = values.isEmpty ? nil : values
+        clip.edit = edit
+    }
+
+    private func migrateLegacyTitle() {
+        guard clip.edit.titles == nil, clip.edit.title != nil else { return }
+        setTitles(clip.edit.titleOverlays)
+    }
+
+    private func addTitle() {
+        let out = clip.edit.effectiveOut(duration: duration)
+        let start = min(max(player.currentSourceTime, clip.edit.inPoint),
+                        max(clip.edit.inPoint, out - 0.05))
+        var values = titles
+        values.append(TitleOverlay(text: "Title \(values.count + 1)", start: start,
+                                   end: min(start + 3, out)))
+        setTitles(values)
+    }
+
+    private func removeTitle(_ index: Int) {
+        var values = titles
+        guard values.indices.contains(index) else { return }
+        values.remove(at: index)
+        setTitles(values)
+        if values.isEmpty { showingInspector = false }
+    }
+
+    private func setStart(_ index: Int) {
+        var values = titles
+        guard values.indices.contains(index) else { return }
+        let out = clip.edit.effectiveOut(duration: duration)
+        values[index].start = min(max(player.currentSourceTime, clip.edit.inPoint),
+                                  max(clip.edit.inPoint, out - 0.05))
+        values[index].end = min(out, max(values[index].end, values[index].start + 0.05))
+        setTitles(values)
+    }
+
+    private func setEnd(_ index: Int) {
+        var values = titles
+        guard values.indices.contains(index) else { return }
+        values[index].end = min(max(player.currentSourceTime, values[index].start + 0.05),
+                                clip.edit.effectiveOut(duration: duration))
+        setTitles(values)
+    }
+
+    private func titleBinding<Value>(_ index: Int,
+                                     _ keyPath: WritableKeyPath<TitleOverlay, Value>) -> Binding<Value> {
         Binding(
-            get: { clip.edit.title![keyPath: keyPath] },
+            get: { titles[index][keyPath: keyPath] },
             set: { value in
-                guard var title = clip.edit.title else { return }
-                title[keyPath: keyPath] = value
-                clip.edit.title = title
+                var values = titles
+                guard values.indices.contains(index) else { return }
+                values[index][keyPath: keyPath] = value
+                setTitles(values)
             }
         )
     }

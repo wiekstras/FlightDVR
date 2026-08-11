@@ -147,8 +147,10 @@ enum SelfTest {
         plan.speedZones = [SpeedZone(start: 5, end: 8, speed: 2.0)]
         plan.music = MusicTrack(url: music, volume: 0.5, fadeIn: 0.5, fadeOut: 1.0, muteOriginal: false)
         plan.sourceAudio = SourceAudioSettings(volume: 0.55, fadeIn: 0.25, fadeOut: 0.5)
-        plan.title = TitleOverlay(text: "Lap: 100% 'fast'", start: 1.5, end: 2.5,
-                                  position: .top)
+        plan.titles = [
+            TitleOverlay(text: "Lap: 100% 'fast'", start: 1.5, end: 2.5, position: .top),
+            TitleOverlay(text: "Final push", start: 8.1, end: 8.8, position: .bottom)
+        ]
 
         // 3a. Filename date parsing.
         let cal = Calendar.current
@@ -235,7 +237,7 @@ enum SelfTest {
         guard messy.inPoint == 0, messy.effectiveOut(duration: info.duration) == info.duration,
               messy.cuts.count == 1, messy.cuts[0].start == 2, messy.cuts[0].end == 6,
               messy.speedZones[0].speed == 4, messy.speedZones[0].rampDuration <= 1,
-              messy.sourceAudio == nil, messy.title == nil else {
+              messy.sourceAudio == nil, messy.title == nil, messy.titles == nil else {
             throw Failure("edit sanitisation did not clamp and merge malformed ranges")
         }
         var empty = EditPlan(inPoint: 5, outPoint: 5)
@@ -410,8 +412,12 @@ enum SelfTest {
 
         let out = workDir.appendingPathComponent("edited.mp4")
         let commandsJobID = UUID()
-        defer { try? FileManager.default.removeItem(
-            at: ExportCommandBuilder.titleAssetURL(jobID: commandsJobID)) }
+        defer {
+            for index in 0..<2 {
+                try? FileManager.default.removeItem(
+                    at: ExportCommandBuilder.titleAssetURL(jobID: commandsJobID, index: index))
+            }
+        }
         let commands = ExportCommandBuilder.build(
             plan: plan, settings: settings, info: info,
             source: src, output: out, jobID: commandsJobID)
@@ -424,10 +430,12 @@ enum SelfTest {
         }
         guard commands[0].contains(where: {
             $0.contains("overlay=x=(W-w)/2:y=H*0.08")
-                && $0.contains("enable='between(t,")
+                && $0.contains("[vtitle0]") && $0.contains("[vtitle1]")
         }), FileManager.default.fileExists(atPath: ExportCommandBuilder.titleAssetURL(
-            jobID: commandsJobID).path) else {
-            throw Failure("timed title image, placement or visibility was missing from the export graph")
+            jobID: commandsJobID, index: 0).path),
+           FileManager.default.fileExists(atPath: ExportCommandBuilder.titleAssetURL(
+            jobID: commandsJobID, index: 1).path) else {
+            throw Failure("multi-title images, placement or visibility were missing from the export graph")
         }
         guard let titleImage = NSImage(contentsOf: ExportCommandBuilder.titleAssetURL(
             jobID: commandsJobID)), titleImage.size.height > 40, titleImage.size.height < 100 else {

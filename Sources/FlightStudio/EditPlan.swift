@@ -100,13 +100,20 @@ struct EditPlan: Equatable, Codable {
     var speedZones: [SpeedZone] = []
     var music: MusicTrack? = nil
     var sourceAudio: SourceAudioSettings? = nil
+    /// `title` preserves projects written before multi-title support.
     var title: TitleOverlay? = nil
+    var titles: [TitleOverlay]? = nil
     var markers: [TimelineMarker] = []
+
+    var titleOverlays: [TitleOverlay] {
+        if let titles, !titles.isEmpty { return titles }
+        return title.map { [$0] } ?? []
+    }
 
     var isDefault: Bool {
         inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty
             && music == nil && (sourceAudio?.isDefault ?? true)
-            && title == nil
+            && titleOverlays.isEmpty
     }
 
     /// Trim around a moment without exceeding the source. Near either edge the
@@ -194,16 +201,18 @@ struct EditPlan: Equatable, Codable {
         } else {
             result.sourceAudio = nil
         }
-        if var title = title {
-            title.text = String(title.text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
-            title.start = min(max(title.start.isFinite ? title.start : result.inPoint,
-                                  result.inPoint), rangeEnd)
-            title.end = min(max(title.end.isFinite ? title.end : title.start,
-                                title.start), rangeEnd)
-            result.title = title.text.isEmpty || title.end - title.start < 0.05 ? nil : title
-        } else {
-            result.title = nil
+        result.title = nil
+        let cleanedTitles = titleOverlays.compactMap { overlay -> TitleOverlay? in
+            var cleaned = overlay
+            cleaned.text = String(overlay.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix(200))
+            cleaned.start = min(max(overlay.start.isFinite ? overlay.start : result.inPoint,
+                                    result.inPoint), rangeEnd)
+            cleaned.end = min(max(overlay.end.isFinite ? overlay.end : cleaned.start,
+                                  cleaned.start), rangeEnd)
+            return cleaned.text.isEmpty || cleaned.end - cleaned.start < 0.05 ? nil : cleaned
         }
+        result.titles = cleanedTitles.isEmpty ? nil : cleanedTitles
         return result
     }
 
@@ -359,7 +368,7 @@ enum FilterGraphBuilder {
     /// Input 0 is the clip; input 1 (optional) is the music file.
     static func build(plan: EditPlan, duration: Double, sourceHasAudio: Bool,
                       fixColorRange: Bool, outputVideoFilter: String? = nil,
-                      titleInputIndex: Int? = nil) -> Graph {
+                      titleInputIndices: [Int] = []) -> Graph {
         let plan = plan.sanitized(duration: duration)
         let segs = plan.resolvedSegments(duration: duration)
         precondition(!segs.isEmpty, "empty edit")
@@ -401,7 +410,8 @@ enum FilterGraphBuilder {
             lines.append("[\(vOut)]\(outputVideoFilter)[vdelivery]")
             vOut = "vdelivery"
         }
-        if let title = plan.title, let titleInputIndex {
+        for (index, pair) in zip(plan.titleOverlays, titleInputIndices).enumerated() {
+            let (title, titleInputIndex) = pair
             let start = plan.outputTime(forSource: title.start, duration: duration)
             let end = plan.outputTime(forSource: title.end, duration: duration)
             let y: String
@@ -410,10 +420,11 @@ enum FilterGraphBuilder {
             case .center: y = "(H-h)/2"
             case .bottom: y = "H-h-H*0.08"
             }
+            let label = "vtitle\(index)"
             lines.append(String(
-                format: "[%@][%d:v]overlay=x=(W-w)/2:y=%@:enable='between(t,%.4f,%.4f)':eof_action=repeat:shortest=1[vtitle]",
-                vOut, titleInputIndex, y, start, end))
-            vOut = "vtitle"
+                format: "[%@][%d:v]overlay=x=(W-w)/2:y=%@:enable='between(t,%.4f,%.4f)':eof_action=repeat:shortest=1[%@]",
+                vOut, titleInputIndex, y, start, end, label))
+            vOut = label
         }
 
         var aOut: String? = nil

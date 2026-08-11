@@ -288,11 +288,14 @@ struct PlayerPane: View {
             ZStack {
                 PlayerViewRepresentable(player: player.player, scaling: scaling)
                 if player.previewingEdit,
-                   let title = store.selectedClip?.edit.sanitized(duration: sourceDuration).title,
-                   title.isVisible(at: player.currentSourceTime) {
-                    TitlePreview(title: title)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
+                   let edit = store.selectedClip?.edit.sanitized(duration: sourceDuration) {
+                    ForEach(Array(edit.titleOverlays.enumerated()), id: \.offset) { _, title in
+                        if title.isVisible(at: player.currentSourceTime) {
+                            TitlePreview(title: title)
+                                .allowsHitTesting(false)
+                                .transition(.opacity)
+                        }
+                    }
                 }
                 if !player.isReady {
                     ProgressView("Preparing preview…")

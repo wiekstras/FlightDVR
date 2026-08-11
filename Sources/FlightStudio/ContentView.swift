@@ -178,6 +178,15 @@ struct ClipListView: View {
                 Button("Preview") {
                     if let clip = selection.first { store.selectedClip = clip }
                 }
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting(selection.map(\.url))
+                }
+                Button("Copy paths") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(
+                        selection.map(\.url.path).sorted().joined(separator: "\\n"),
+                        forType: .string)
+                }
                 Divider()
                 Button("Move to Trash", role: .destructive) {
                     store.moveToTrash(Array(selection))

@@ -267,7 +267,7 @@ enum SelfTest {
         print("edit project ok")
 
         // 3e. Every non-destructive edit can be undone and redone.
-        let historyClip = Clip(url: src)
+        let historyClip = Clip.exportVariant(from: favoriteClip, edit: EditPlan())
         historyClip.clearEditHistory()
         historyClip.edit.inPoint = 2
         guard historyClip.canUndoEdit else { throw Failure("edit history did not record a trim") }

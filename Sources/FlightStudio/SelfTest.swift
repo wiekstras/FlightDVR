@@ -108,6 +108,7 @@ enum SelfTest {
         plan.cuts = [CutRange(start: 3, end: 4)]
         plan.speedZones = [SpeedZone(start: 5, end: 8, speed: 2.0)]
         plan.music = MusicTrack(url: music, volume: 0.5, fadeIn: 0.5, fadeOut: 1.0, muteOriginal: false)
+        plan.sourceAudio = SourceAudioSettings(volume: 0.55, fadeIn: 0.25, fadeOut: 0.5)
 
         // 3a. Filename date parsing.
         let cal = Calendar.current
@@ -173,11 +174,15 @@ enum SelfTest {
         var messy = EditPlan(inPoint: -2, outPoint: 99,
                              cuts: [CutRange(start: 2, end: 4), CutRange(start: 3, end: 6),
                                     CutRange(start: 8, end: 7)],
-                             speedZones: [SpeedZone(start: -1, end: 2, speed: 99, rampDuration: 9)])
+                             speedZones: [SpeedZone(start: -1, end: 2, speed: 99, rampDuration: 9)],
+                             sourceAudio: SourceAudioSettings(volume: .infinity,
+                                                              fadeIn: -.infinity,
+                                                              fadeOut: .nan))
         messy = messy.sanitized(duration: info.duration)
         guard messy.inPoint == 0, messy.effectiveOut(duration: info.duration) == info.duration,
               messy.cuts.count == 1, messy.cuts[0].start == 2, messy.cuts[0].end == 6,
-              messy.speedZones[0].speed == 4, messy.speedZones[0].rampDuration <= 1 else {
+              messy.speedZones[0].speed == 4, messy.speedZones[0].rampDuration <= 1,
+              messy.sourceAudio == nil else {
             throw Failure("edit sanitisation did not clamp and merge malformed ranges")
         }
         var empty = EditPlan(inPoint: 5, outPoint: 5)
@@ -332,6 +337,12 @@ enum SelfTest {
             plan: plan, settings: settings, info: info,
             source: src, output: out, jobID: UUID())
         guard commands.count == 1 else { throw Failure("master preset should be one pass") }
+        guard commands[0].contains(where: {
+            $0.contains("volume=0.550,afade=t=in:d=0.250")
+                && $0.contains("afade=t=out")
+        }) else {
+            throw Failure("source audio volume and fades were missing from the export graph")
+        }
         print("running export…")
         try FFmpeg.run(commands[0])
 
@@ -355,6 +366,7 @@ enum SelfTest {
                         previewMP4.path])
         let compSem = DispatchSemaphore(value: 0)
         nonisolated(unsafe) var compSeconds: Double = -1
+        nonisolated(unsafe) var compMixInputs = 0
         nonisolated(unsafe) var compError: (any Error)?
         let compPlan = plan
         let compDuration = info.duration
@@ -364,6 +376,7 @@ enum SelfTest {
                     plan: compPlan, sourceDuration: compDuration, previewURL: previewMP4)
                 compSeconds = comp.duration.seconds
                 if mix == nil { compError = Failure("audio mix missing despite music track") }
+                compMixInputs = mix?.inputParameters.count ?? 0
             } catch {
                 compError = error
             }
@@ -373,7 +386,7 @@ enum SelfTest {
             throw Failure("composition build timed out")
         }
         if let compError { throw compError }
-        guard abs(compSeconds - expected) < 0.35 else {
+        guard abs(compSeconds - expected) < 0.35, compMixInputs == 2 else {
             throw Failure("composition duration \(compSeconds) vs planned \(expected)")
         }
         print("edit-preview composition ok: \(String(format: "%.2f", compSeconds))s with audio mix")

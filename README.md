@@ -26,6 +26,8 @@ it, and add eased speed ramps.
     so speed changes flow instead of snapping
   - **music track** from any audio file, with volume, fade in/out, and a
     choice of mixing under the clip audio or replacing it
+  - **clip audio mix** with independent volume, mute, fade in and fade out,
+    previewed live and rendered identically during export
   - **project files** — save an edit as a portable `.flightedit.json` sidecar
     and reopen it later without copying the source footage
   - **automatic recovery** — every edit is also saved as a local draft as it is

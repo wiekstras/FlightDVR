@@ -136,6 +136,7 @@ final class PlayerController: ObservableObject {
         }
         let aSrc = try await asset.loadTracks(withMediaType: .audio).first
         let duration = sourceDuration > 0 ? sourceDuration : (try await asset.load(.duration)).seconds
+        let plan = plan.sanitized(duration: duration)
 
         let comp = AVMutableComposition()
         let ts: CMTimeScale = 600
@@ -143,7 +144,9 @@ final class PlayerController: ObservableObject {
                                               preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw FFmpeg.ProcessError(command: "", stderr: "could not build composition")
         }
-        let wantOriginalAudio = aSrc != nil && !(plan.music?.muteOriginal ?? false)
+        let wantOriginalAudio = aSrc != nil
+            && !(plan.music?.muteOriginal ?? false)
+            && !(plan.sourceAudio?.isMuted ?? false)
         let aDst = wantOriginalAudio
             ? comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
             : nil
@@ -167,6 +170,28 @@ final class PlayerController: ObservableObject {
         vDst.preferredTransform = try await vSrc.load(.preferredTransform)
 
         var mixParams: [AVMutableAudioMixInputParameters] = []
+        if let audio = plan.sourceAudio, !audio.isDefault, let aDst {
+            let p = AVMutableAudioMixInputParameters(track: aDst)
+            let volume = Float(audio.volume)
+            p.setVolume(volume, at: .zero)
+            let outputDuration = cursor.seconds
+            let fadeIn = min(audio.fadeIn, outputDuration)
+            if fadeIn > 0.01 {
+                p.setVolumeRamp(fromStartVolume: 0, toEndVolume: volume,
+                                timeRange: CMTimeRange(
+                                    start: .zero,
+                                    duration: CMTime(seconds: fadeIn, preferredTimescale: ts)))
+            }
+            let fadeOut = min(audio.fadeOut, outputDuration)
+            if fadeOut > 0.01 {
+                p.setVolumeRamp(fromStartVolume: volume, toEndVolume: 0,
+                                timeRange: CMTimeRange(
+                                    start: CMTime(seconds: max(0, outputDuration - fadeOut),
+                                                  preferredTimescale: ts),
+                                    duration: CMTime(seconds: fadeOut, preferredTimescale: ts)))
+            }
+            mixParams.append(p)
+        }
         if let music = plan.music {
             let mAsset = AVURLAsset(url: music.url)
             if let mSrc = try await mAsset.loadTracks(withMediaType: .audio).first,

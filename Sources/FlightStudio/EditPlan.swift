@@ -21,7 +21,18 @@ struct MusicTrack: Equatable, Codable {
     var volume: Double = 0.8         // 0…1
     var fadeIn: Double = 1.0
     var fadeOut: Double = 2.0
-    var muteOriginal: Bool = true
+    var muteOriginal: Bool = false
+}
+
+struct SourceAudioSettings: Equatable, Codable {
+    var volume: Double = 1
+    var isMuted = false
+    var fadeIn: Double = 0
+    var fadeOut: Double = 0
+
+    var isDefault: Bool {
+        volume == 1 && !isMuted && fadeIn == 0 && fadeOut == 0
+    }
 }
 
 /// A named, non-destructive bookmark for a moment worth returning to.
@@ -49,10 +60,12 @@ struct EditPlan: Equatable, Codable {
     var cuts: [CutRange] = []
     var speedZones: [SpeedZone] = []
     var music: MusicTrack? = nil
+    var sourceAudio: SourceAudioSettings? = nil
     var markers: [TimelineMarker] = []
 
     var isDefault: Bool {
-        inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty && music == nil
+        inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty
+            && music == nil && (sourceAudio?.isDefault ?? true)
     }
 
     /// Trim around a moment without exceeding the source. Near either edge the
@@ -131,6 +144,14 @@ struct EditPlan: Equatable, Codable {
             result.music = cleaned
         } else {
             result.music = nil
+        }
+        if var audio = sourceAudio {
+            audio.volume = min(max(audio.volume.isFinite ? audio.volume : 1, 0), 1)
+            audio.fadeIn = max(audio.fadeIn.isFinite ? audio.fadeIn : 0, 0)
+            audio.fadeOut = max(audio.fadeOut.isFinite ? audio.fadeOut : 0, 0)
+            result.sourceAudio = audio.isDefault ? nil : audio
+        } else {
+            result.sourceAudio = nil
         }
         return result
     }
@@ -295,7 +316,9 @@ enum FilterGraphBuilder {
         var lines: [String] = []
         var vLabels: [String] = []
         var aLabels: [String] = []
-        let wantOriginalAudio = sourceHasAudio && !(plan.music?.muteOriginal ?? false)
+        let wantOriginalAudio = sourceHasAudio
+            && !(plan.music?.muteOriginal ?? false)
+            && !(plan.sourceAudio?.isMuted ?? false)
 
         for (i, seg) in segs.enumerated() {
             let v = "v\(i)"
@@ -334,6 +357,21 @@ enum FilterGraphBuilder {
             } else {
                 lines.append("\(aLabels.joined())concat=n=\(aLabels.count):v=0:a=1[acat]")
                 aOut = "acat"
+            }
+            if let audio = plan.sourceAudio, !audio.isDefault, let existing = aOut {
+                let fadeIn = min(audio.fadeIn, outDur)
+                let fadeOut = min(audio.fadeOut, outDur)
+                let fadeOutStart = max(0, outDur - fadeOut)
+                var filters = [String(format: "volume=%.3f", audio.volume)]
+                if fadeIn > 0.01 {
+                    filters.append(String(format: "afade=t=in:d=%.3f", fadeIn))
+                }
+                if fadeOut > 0.01 {
+                    filters.append(String(format: "afade=t=out:st=%.3f:d=%.3f",
+                                          fadeOutStart, fadeOut))
+                }
+                lines.append("[\(existing)]\(filters.joined(separator: ","))[asource]")
+                aOut = "asource"
             }
         }
 

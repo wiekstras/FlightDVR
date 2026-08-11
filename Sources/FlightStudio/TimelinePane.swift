@@ -167,8 +167,8 @@ private struct TimelineEditor: View {
                     .help("Add marker (M)")
                 }
                 benchDivider
-                tool("Music") {
-                    MusicControls(clip: clip)
+                tool("Audio") {
+                    AudioControls(clip: clip)
                 }
                 benchDivider
                 tool("Project") {
@@ -248,45 +248,103 @@ private struct TimelineEditor: View {
     }
 }
 
-private struct MusicControls: View {
+private struct AudioControls: View {
     @ObservedObject var clip: Clip
+    @State private var showingInspector = false
 
     var body: some View {
+        Button {
+            showingInspector.toggle()
+        } label: {
+            Label("Mix…", systemImage: clip.edit.sourceAudio?.isMuted == true
+                  ? "speaker.slash" : "slider.horizontal.3")
+        }
+        .popover(isPresented: $showingInspector, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 12) {
+                Eyebrow("Clip Audio")
+                if clip.info?.hasAudio == false {
+                    Text("This recording has no audio track.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Volume") {
+                        Slider(value: audioBinding(\.volume), in: 0...1)
+                            .frame(width: 150)
+                    }
+                    Toggle("Mute recording", isOn: audioBinding(\.isMuted))
+                    LabeledContent("Fade in") {
+                        Slider(value: audioBinding(\.fadeIn), in: 0...10, step: 0.25)
+                            .frame(width: 150)
+                    }
+                    LabeledContent("Fade out") {
+                        Slider(value: audioBinding(\.fadeOut), in: 0...10, step: 0.25)
+                            .frame(width: 150)
+                    }
+                    Button("Reset clip audio") { clip.edit.sourceAudio = nil }
+                        .disabled(clip.edit.sourceAudio == nil)
+                }
+
+                Divider()
+                Eyebrow("Music")
+                musicEditor
+            }
+            .controlSize(.small)
+            .padding(14)
+            .frame(width: 290)
+        }
+    }
+
+    private func audioBinding(_ keyPath: WritableKeyPath<SourceAudioSettings, Double>) -> Binding<Double> {
+        Binding(
+            get: { (clip.edit.sourceAudio ?? SourceAudioSettings())[keyPath: keyPath] },
+            set: { value in updateAudio { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    private func audioBinding(_ keyPath: WritableKeyPath<SourceAudioSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { (clip.edit.sourceAudio ?? SourceAudioSettings())[keyPath: keyPath] },
+            set: { value in updateAudio { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    private func updateAudio(_ change: (inout SourceAudioSettings) -> Void) {
+        var audio = clip.edit.sourceAudio ?? SourceAudioSettings()
+        change(&audio)
+        clip.edit.sourceAudio = audio.isDefault ? nil : audio
+    }
+
+    @ViewBuilder private var musicEditor: some View {
         if let music = clip.edit.music {
             Text(music.url.deletingPathExtension().lastPathComponent)
                 .font(.caption)
                 .lineLimit(1)
-                .frame(maxWidth: 120)
-            Slider(value: Binding(
-                get: { clip.edit.music?.volume ?? 0.8 },
-                set: { clip.edit.music?.volume = $0 }
-            ), in: 0...1)
-            .frame(width: 76)
-            HStack(spacing: 3) {
-                Text("In")
+            LabeledContent("Volume") {
+                Slider(value: Binding(
+                    get: { clip.edit.music?.volume ?? 0.8 },
+                    set: { clip.edit.music?.volume = $0 }
+                ), in: 0...1)
+                .frame(width: 150)
+            }
+            LabeledContent("Fade in") {
                 Slider(value: Binding(
                     get: { clip.edit.music?.fadeIn ?? 1 },
                     set: { clip.edit.music?.fadeIn = $0 }
                 ), in: 0...10, step: 0.25)
-                .frame(width: 54)
-                Text("Out")
+                .frame(width: 150)
+            }
+            LabeledContent("Fade out") {
                 Slider(value: Binding(
                     get: { clip.edit.music?.fadeOut ?? 2 },
                     set: { clip.edit.music?.fadeOut = $0 }
                 ), in: 0...10, step: 0.25)
-                .frame(width: 54)
+                .frame(width: 150)
             }
-            .font(.caption2)
-            Toggle("Mute clip", isOn: Binding(
-                get: { clip.edit.music?.muteOriginal ?? true },
+            Toggle("Replace recording audio", isOn: Binding(
+                get: { clip.edit.music?.muteOriginal ?? false },
                 set: { clip.edit.music?.muteOriginal = $0 }
             ))
-            .font(.caption)
-            Button {
-                clip.edit.music = nil
-            } label: {
-                Image(systemName: "xmark")
-            }
+            Button("Remove music", role: .destructive) { clip.edit.music = nil }
         } else {
             Button("Add music…") {
                 let panel = NSOpenPanel()

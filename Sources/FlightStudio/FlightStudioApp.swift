@@ -4,6 +4,7 @@ import SwiftUI
 struct FlightStudioApp: App {
     @StateObject private var store = ClipStore()
     @StateObject private var queue = ExportQueue()
+    @StateObject private var publishQueue = PublishQueue()
 
     init() {
         SelfTest.runIfRequested()
@@ -14,6 +15,7 @@ struct FlightStudioApp: App {
             ContentView()
                 .environmentObject(store)
                 .environmentObject(queue)
+                .environmentObject(publishQueue)
                 .frame(minWidth: 1100, minHeight: 700)
         }
         .windowStyle(.automatic)

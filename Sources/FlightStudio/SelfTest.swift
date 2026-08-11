@@ -269,6 +269,20 @@ enum SelfTest {
         guard socialCommands[0].contains(where: { $0.contains("pad=1080:1920") }) else {
             throw Failure("social export did not apply the vertical delivery canvas")
         }
+        var publishDraft = PublishDraft()
+        publishDraft.title = "Clean gap"
+        publishDraft.platforms = [.tiktok, .youtube]
+        guard !PublishValidator.validate(draft: publishDraft, settings: socialSettings)
+            .contains(where: { $0.severity == .error }) else {
+            throw Failure("valid social publishing draft was rejected")
+        }
+        var invalidPublishSettings = ExportSettings()
+        invalidPublishSettings.preset = .master
+        guard PublishValidator.validate(draft: publishDraft, settings: invalidPublishSettings)
+            .contains(where: { $0.severity == .error }) else {
+            throw Failure("non-vertical TikTok publishing draft was accepted")
+        }
+        print("publish validation ok")
         for c in socialCommands { try FFmpeg.run(c) }
         let socialSize = (try FileManager.default.attributesOfItem(atPath: socialOut.path)[.size]) as? Int64 ?? 0
         let socialMB = Double(socialSize) / 1_000_000

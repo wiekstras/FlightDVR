@@ -60,6 +60,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     @Published var info: ClipInfo?
     @Published var thumbnail: NSImage?
     @Published var timelineFilmstrip: NSImage?
+    @Published var timelineWaveform: NSImage?
     @Published var ticked = false
     @Published var previewURL: URL?      // remuxed .mp4 the native player can open
     @Published var edit = EditPlan() {
@@ -240,6 +241,17 @@ enum TimelineFilmstripBuilder {
     }
 }
 
+enum TimelineWaveformBuilder {
+    static func command(source: URL, output: URL, width: Int = 1600,
+                        height: Int = 80) -> [String] {
+        let safeWidth = max(width, 320)
+        let safeHeight = max(height, 40)
+        let filter = "[0:a]aformat=channel_layouts=mono,showwavespic=s=\(safeWidth)x\(safeHeight):colors=white[wave]"
+        return ["-y", "-i", source.path, "-filter_complex", filter,
+                "-map", "[wave]", "-frames:v", "1", output.path]
+    }
+}
+
 @MainActor
 final class ClipStore: ObservableObject {
     private static let lastFolderDefaultsKey = "lastSourceFolder"
@@ -256,6 +268,7 @@ final class ClipStore: ObservableObject {
     @Published var tagFilter = ""
     @Published var previewCacheBytes: Int64 = 0
     private var filmstripTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var waveformTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
@@ -502,6 +515,8 @@ final class ClipStore: ObservableObject {
     func clearPreviewCache() {
         for entry in filmstripTasks.values { entry.task.cancel() }
         filmstripTasks.removeAll()
+        for entry in waveformTasks.values { entry.task.cancel() }
+        waveformTasks.removeAll()
         for url in Self.previewFiles() {
             try? FileManager.default.removeItem(at: url)
         }
@@ -509,6 +524,7 @@ final class ClipStore: ObservableObject {
             clip.previewURL = nil
         }
         for clip in clips { clip.timelineFilmstrip = nil }
+        for clip in clips { clip.timelineWaveform = nil }
         refreshCacheSize()
         statusMessage = "Preview cache cleared."
     }
@@ -519,6 +535,7 @@ final class ClipStore: ObservableObject {
             .filter {
                 $0.lastPathComponent.hasPrefix("preview-")
                     || $0.lastPathComponent.hasPrefix("filmstrip-")
+                    || $0.lastPathComponent.hasPrefix("waveform-")
             }
     }
 
@@ -607,6 +624,58 @@ final class ClipStore: ObservableObject {
             }
         }
         filmstripTasks[clipURL] = (taskID, task)
+    }
+
+    /// Waveforms are also selected-clip-only. Long recordings may take time to
+    /// analyse, so obsolete work is terminated as soon as selection changes.
+    func prepareTimelineWaveform(for clip: Clip) {
+        let obsolete = waveformTasks.keys.filter { $0 != clip.url }
+        for url in obsolete {
+            waveformTasks[url]?.task.cancel()
+            waveformTasks[url] = nil
+        }
+        guard clip.timelineWaveform == nil,
+              clip.info?.hasAudio == true,
+              waveformTasks[clip.url] == nil else { return }
+        let out = Self.cacheRoot.appendingPathComponent(
+            "waveform-\(Self.cacheKey(for: clip.url)).png")
+        if let cached = NSImage(contentsOf: out) {
+            clip.timelineWaveform = cached
+            return
+        }
+
+        let clipURL = clip.url
+        let taskID = UUID()
+        let staging = Self.cacheRoot.appendingPathComponent(
+            "waveform-work-\(taskID.uuidString).png")
+        let task = Task.detached(priority: .utility) {
+            let args = TimelineWaveformBuilder.command(source: clip.url, output: staging)
+            let generated: Bool
+            do {
+                _ = try FFmpeg.run(args, isCancelled: { Task.isCancelled })
+                generated = !Task.isCancelled
+            } catch {
+                generated = false
+                try? FileManager.default.removeItem(at: staging)
+            }
+            await MainActor.run { [weak self, weak clip] in
+                guard self?.waveformTasks[clipURL]?.id == taskID else {
+                    try? FileManager.default.removeItem(at: staging)
+                    return
+                }
+                self?.waveformTasks[clipURL] = nil
+                if generated {
+                    try? FileManager.default.removeItem(at: out)
+                    try? FileManager.default.moveItem(at: staging, to: out)
+                }
+                if generated, let image = NSImage(contentsOf: out) {
+                    clip?.timelineWaveform = image
+                    Task.detached { Self.enforceCacheCap(keeping: out) }
+                    self?.refreshCacheSize()
+                }
+            }
+        }
+        waveformTasks[clipURL] = (taskID, task)
     }
 
     // MARK: Preview cache (lossless remux so AVPlayer can open it)

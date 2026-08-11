@@ -86,6 +86,18 @@ enum SelfTest {
               filmstripCommand.last == filmstripOut.path else {
             throw Failure("timeline filmstrip command did not sample the full recording")
         }
+        let waveformOut = workDir.appendingPathComponent("waveform.png")
+        let waveformCommand = TimelineWaveformBuilder.command(
+            source: nestedClip, output: waveformOut, width: 10, height: 10)
+        guard waveformCommand.contains(where: { $0.contains("showwavespic=s=320x40") }) else {
+            throw Failure("timeline waveform command did not clamp its render size")
+        }
+        try FFmpeg.run(waveformCommand)
+        let waveformBytes = (try FileManager.default.attributesOfItem(
+            atPath: waveformOut.path)[.size]) as? Int64 ?? 0
+        guard waveformBytes > 0 else {
+            throw Failure("timeline waveform generation produced no image")
+        }
         print("recursive scan ok: found nested clip at DCIM/100MEDIA")
 
         // 2. Probe it.

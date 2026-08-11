@@ -17,6 +17,7 @@ struct TimelinePane: View {
                 .id(clip.id)
                 .task(id: clip.info?.duration) {
                     store.prepareTimelineFilmstrip(for: clip)
+                    store.prepareTimelineWaveform(for: clip)
                 }
         }
     }
@@ -470,6 +471,15 @@ private struct TimelineBar: View {
                             .saturation(0.72)
                             .opacity(0.62)
                             .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
+                    if let waveform = clip.timelineWaveform {
+                        Image(nsImage: waveform)
+                            .resizable()
+                            .frame(width: w, height: trackHeight)
+                            .opacity(0.72)
+                            .blendMode(.screen)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .allowsHitTesting(false)
                     }
 
                     let inX = x(clip.edit.inPoint)

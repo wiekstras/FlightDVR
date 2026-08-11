@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// `FlightStudio --selftest [work-dir]` — exercises the real pipeline headlessly:
 /// synthesises an HDZero-style clip (H.265, full range, bt470bg tags, MPEG-TS),
@@ -427,6 +428,10 @@ enum SelfTest {
         }), FileManager.default.fileExists(atPath: ExportCommandBuilder.titleAssetURL(
             jobID: commandsJobID).path) else {
             throw Failure("timed title image, placement or visibility was missing from the export graph")
+        }
+        guard let titleImage = NSImage(contentsOf: ExportCommandBuilder.titleAssetURL(
+            jobID: commandsJobID)), titleImage.size.height > 40, titleImage.size.height < 100 else {
+            throw Failure("title asset did not scale to the 720p export canvas")
         }
         print("running export…")
         try FFmpeg.run(commands[0])

@@ -777,10 +777,14 @@ enum ExportCommandBuilder {
         var titleInputIndex: Int?
         if let title = safePlan.title {
             let url = titleAssetURL(jobID: jobID)
-            if TitleImageRenderer.write(title.text, to: url) {
-                titleInputIndex = safePlan.music == nil ? 1 : 2
-                inputs += ["-loop", "1", "-i", url.path]
-            }
+            let canvas = settings.preset == .social
+                ? settings.socialProfile.canvasSize : (info.width, info.height)
+            _ = TitleImageRenderer.write(title.text, canvasWidth: canvas.0,
+                                         canvasHeight: canvas.1, to: url)
+            // Always include the expected asset. A filesystem/rendering failure
+            // then produces an explicit failed job instead of silently omitting text.
+            titleInputIndex = safePlan.music == nil ? 1 : 2
+            inputs += ["-loop", "1", "-i", url.path]
         }
         let graph = FilterGraphBuilder.build(plan: effectivePlan, duration: info.duration,
                                              sourceHasAudio: settings.keepAudio && info.hasAudio,
@@ -844,15 +848,23 @@ enum ExportCommandBuilder {
 }
 
 private enum TitleImageRenderer {
-    static func write(_ text: String, to url: URL) -> Bool {
-        let font = NSFont.systemFont(ofSize: 72, weight: .semibold)
+    static func write(_ text: String, canvasWidth: Int, canvasHeight: Int,
+                      to url: URL) -> Bool {
+        let safeWidth = max(canvasWidth, 320)
+        let safeHeight = max(canvasHeight, 240)
+        let fontSize = min(max(CGFloat(safeHeight) * 0.06, 24), 144)
+        let horizontalPadding = max(fontSize * 0.4, 12)
+        let verticalPadding = max(fontSize * 0.25, 8)
+        let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .foregroundColor: NSColor.white
         ]
         let string = NSAttributedString(string: text, attributes: attributes)
-        let measured = string.boundingRect(with: NSSize(width: 1_400, height: 300),
+        let measured = string.boundingRect(with: NSSize(width: CGFloat(safeWidth) * 0.85,
+                                                        height: CGFloat(safeHeight) * 0.25),
                                            options: [.usesLineFragmentOrigin, .usesFontLeading])
-        let size = NSSize(width: ceil(measured.width) + 56, height: ceil(measured.height) + 36)
+        let size = NSSize(width: ceil(measured.width) + horizontalPadding * 2,
+                          height: ceil(measured.height) + verticalPadding * 2)
         guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
                                              pixelsWide: max(Int(size.width), 1),
                                              pixelsHigh: max(Int(size.height), 1),
@@ -865,8 +877,12 @@ private enum TitleImageRenderer {
         NSColor.clear.setFill()
         NSRect(origin: .zero, size: size).fill()
         NSColor.black.withAlphaComponent(0.58).setFill()
-        NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 10, yRadius: 10).fill()
-        string.draw(in: NSRect(x: 28, y: 18, width: size.width - 56, height: size.height - 36))
+        let radius = max(fontSize * 0.14, 6)
+        NSBezierPath(roundedRect: NSRect(origin: .zero, size: size),
+                     xRadius: radius, yRadius: radius).fill()
+        string.draw(in: NSRect(x: horizontalPadding, y: verticalPadding,
+                               width: size.width - horizontalPadding * 2,
+                               height: size.height - verticalPadding * 2))
         NSGraphicsContext.restoreGraphicsState()
         guard let data = bitmap.representation(using: .png, properties: [:]) else { return false }
         do {

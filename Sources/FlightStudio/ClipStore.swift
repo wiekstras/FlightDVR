@@ -400,4 +400,5 @@ final class ClipStore: ObservableObject {
     }
 
     var tickedClips: [Clip] { clips.filter(\.ticked) }
+    var tickedBytes: Int64 { tickedClips.reduce(0) { $0 + ($1.info?.fileSize ?? 0) } }
 }

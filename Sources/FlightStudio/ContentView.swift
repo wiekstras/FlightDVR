@@ -201,7 +201,9 @@ struct ClipListView: View {
                 Button("None") { store.tickAll(false) }
                 Button("Invert") { store.invertTicks() }
                 Spacer()
-                Text("\(store.tickedClips.count) ticked")
+                Text(store.tickedClips.isEmpty
+                     ? "0 ticked"
+                     : "\(store.tickedClips.count) ticked · \(byteString(store.tickedBytes))")
                     .foregroundStyle(.secondary)
             }
             .controlSize(.small)

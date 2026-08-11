@@ -166,6 +166,10 @@ struct ClipListView: View {
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
+            TextField("Filter tags", text: $store.tagFilter)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             Divider()
             List(selection: Binding(
                 get: { store.selectedClip },
@@ -237,6 +241,7 @@ struct ClipListView: View {
 struct ClipRow: View {
     @ObservedObject var clip: Clip
     @EnvironmentObject var store: ClipStore
+    @State private var newTag = ""
 
     var body: some View {
         HStack(spacing: 10) {
@@ -285,6 +290,31 @@ struct ClipRow: View {
                         .lineLimit(1)
                 } else {
                     Text("Reading…").font(.caption).foregroundStyle(.tertiary)
+                }
+                HStack(spacing: 4) {
+                    ForEach(clip.tags, id: \.self) { tag in
+                        Button {
+                            clip.removeTag(tag)
+                            store.objectWillChange.send()
+                        } label: {
+                            Text(tag)
+                                .font(.caption2)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove tag \(tag)")
+                    }
+                    TextField("Add tag", text: $newTag)
+                        .textFieldStyle(.plain)
+                        .font(.caption2)
+                        .frame(width: 72)
+                        .onSubmit {
+                            clip.addTag(newTag)
+                            newTag = ""
+                            store.objectWillChange.send()
+                        }
                 }
             }
             Spacer(minLength: 4)

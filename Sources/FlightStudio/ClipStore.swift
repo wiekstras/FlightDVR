@@ -4,6 +4,7 @@ import CryptoKit
 
 private struct ClipLibraryRecord: Codable {
     var favorite = false
+    var tags: [String] = []
 }
 
 private enum ClipLibraryMetadata {
@@ -47,8 +48,11 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     @Published var favorite = false {
         didSet {
             guard favorite != oldValue else { return }
-            ClipLibraryMetadata.save(ClipLibraryRecord(favorite: favorite), for: url)
+            persistLibraryRecord()
         }
+    }
+    @Published var tags: [String] = [] {
+        didSet { persistLibraryRecord() }
     }
     private var undoEdits: [EditPlan] = []
     private var redoEdits: [EditPlan] = []
@@ -64,7 +68,9 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         self.fileDate = (attrs?[.creationDate] ?? attrs?[.modificationDate]) as? Date ?? .distantPast
         self.parsedDate = Clip.parseDate(from: url.lastPathComponent)
-        self.favorite = ClipLibraryMetadata.record(for: url).favorite
+        let record = ClipLibraryMetadata.record(for: url)
+        self.favorite = record.favorite
+        self.tags = record.tags
     }
 
     var name: String { url.lastPathComponent }
@@ -90,6 +96,21 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     func clearEditHistory() {
         undoEdits.removeAll()
         redoEdits.removeAll()
+    }
+
+    func addTag(_ tag: String) {
+        let cleaned = tag.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty, !tags.contains(where: { $0.caseInsensitiveCompare(cleaned) == .orderedSame }) else { return }
+        tags.append(cleaned)
+        tags.sort { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    func removeTag(_ tag: String) {
+        tags.removeAll { $0 == tag }
+    }
+
+    private func persistLibraryRecord() {
+        ClipLibraryMetadata.save(ClipLibraryRecord(favorite: favorite, tags: tags), for: url)
     }
     /// Best guess at when this was flown: a date embedded in the filename wins,
     /// otherwise the file's own date.
@@ -150,6 +171,7 @@ final class ClipStore: ObservableObject {
     @Published var reverseSort = false
     @Published var searchQuery = ""
     @Published var favoritesOnly = false
+    @Published var tagFilter = ""
     @Published var previewCacheBytes: Int64 = 0
 
     /// Clips in the chosen order. Date order = newest flight first.
@@ -158,7 +180,11 @@ final class ClipStore: ObservableObject {
         let matched = query.isEmpty ? clips : clips.filter {
             $0.relativeName.localizedCaseInsensitiveContains(query)
         }
-        let searchable = favoritesOnly ? matched.filter(\.favorite) : matched
+        let favoriteFiltered = favoritesOnly ? matched.filter(\.favorite) : matched
+        let tag = tagFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searchable = tag.isEmpty ? favoriteFiltered : favoriteFiltered.filter {
+            $0.tags.contains { $0.localizedCaseInsensitiveContains(tag) }
+        }
         let ordered: [Clip]
         switch sortOrder {
         case .date:

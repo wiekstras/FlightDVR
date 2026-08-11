@@ -115,8 +115,13 @@ enum SelfTest {
         let favoriteClip = Clip(url: src)
         favoriteClip.favorite = false
         favoriteClip.favorite = true
+        favoriteClip.addTag("race")
+        favoriteClip.addTag("Race")
         guard Clip(url: src).favorite else {
             throw Failure("favorite metadata was not persisted")
+        }
+        guard Clip(url: src).tags == ["race"] else {
+            throw Failure("tag metadata was not persisted or deduplicated")
         }
         print("favorite persistence ok")
 

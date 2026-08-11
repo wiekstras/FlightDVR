@@ -15,6 +15,9 @@ struct TimelinePane: View {
                            pendingSpeedStart: $pendingSpeedStart,
                            newZoneSpeed: $newZoneSpeed)
                 .id(clip.id)
+                .task(id: clip.info?.duration) {
+                    store.prepareTimelineFilmstrip(for: clip)
+                }
         }
     }
 }
@@ -460,6 +463,14 @@ private struct TimelineBar: View {
                 // The track: seekable, with the edit painted onto it.
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4).fill(TL.track)
+                    if let filmstrip = clip.timelineFilmstrip {
+                        Image(nsImage: filmstrip)
+                            .resizable()
+                            .frame(width: w, height: trackHeight)
+                            .saturation(0.72)
+                            .opacity(0.62)
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    }
 
                     let inX = x(clip.edit.inPoint)
                     let outX = x(clip.edit.effectiveOut(duration: duration))

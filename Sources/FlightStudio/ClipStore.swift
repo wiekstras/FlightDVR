@@ -59,6 +59,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     let url: URL
     @Published var info: ClipInfo?
     @Published var thumbnail: NSImage?
+    @Published var timelineFilmstrip: NSImage?
     @Published var ticked = false
     @Published var previewURL: URL?      // remuxed .mp4 the native player can open
     @Published var edit = EditPlan() {
@@ -215,6 +216,30 @@ struct ScannedVideoFile: Equatable, Sendable {
     var fileDate: Date
 }
 
+enum TimelineFilmstripBuilder {
+    static func command(source: URL, duration: Double, output: URL,
+                        frameCount: Int = 12) -> [String] {
+        let count = max(2, frameCount)
+        var args = ["-y"]
+        for index in 0..<count {
+            let fraction = (Double(index) + 0.5) / Double(count)
+            args += ["-ss", String(format: "%.3f", max(0, duration * fraction)),
+                     "-i", source.path]
+        }
+        var filters: [String] = []
+        for index in 0..<count {
+            // Decode past the imprecise transport-stream seek point before
+            // taking a frame, avoiding the torn first GOP common on DVR files.
+            filters.append("[\(index):v]select=gte(n\\,12),scale=160:90,setpts=PTS-STARTPTS[v\(index)]")
+        }
+        let inputs = (0..<count).map { "[v\($0)]" }.joined()
+        filters.append("\(inputs)hstack=inputs=\(count)[strip]")
+        args += ["-filter_complex", filters.joined(separator: ";"),
+                 "-map", "[strip]", "-frames:v", "1", "-q:v", "5", output.path]
+        return args
+    }
+}
+
 @MainActor
 final class ClipStore: ObservableObject {
     private static let lastFolderDefaultsKey = "lastSourceFolder"
@@ -230,6 +255,7 @@ final class ClipStore: ObservableObject {
     @Published var favoritesOnly = false
     @Published var tagFilter = ""
     @Published var previewCacheBytes: Int64 = 0
+    private var filmstripsInFlight: Set<URL> = []
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
@@ -271,8 +297,10 @@ final class ClipStore: ObservableObject {
     }()
 
     nonisolated private static func cacheKey(for url: URL) -> String {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64 ?? 0
-        let digest = Insecure.MD5.hash(data: Data("\(url.path)|\(size)".utf8))
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let size = attrs?[.size] as? Int64 ?? 0
+        let modified = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        let digest = Insecure.MD5.hash(data: Data("\(url.path)|\(size)|\(modified)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
@@ -478,6 +506,7 @@ final class ClipStore: ObservableObject {
         for clip in clips where clip.url.pathExtension.lowercased() == "ts" {
             clip.previewURL = nil
         }
+        for clip in clips { clip.timelineFilmstrip = nil }
         refreshCacheSize()
         statusMessage = "Preview cache cleared."
     }
@@ -485,7 +514,10 @@ final class ClipStore: ObservableObject {
     nonisolated private static func previewFiles() -> [URL] {
         ((try? FileManager.default.contentsOfDirectory(
             at: cacheRoot, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-            .filter { $0.lastPathComponent.hasPrefix("preview-") }
+            .filter {
+                $0.lastPathComponent.hasPrefix("preview-")
+                    || $0.lastPathComponent.hasPrefix("filmstrip-")
+            }
     }
 
     /// Drop the oldest previews until the cache fits the cap, sparing `keep`.
@@ -521,6 +553,35 @@ final class ClipStore: ObservableObject {
             ])
         }
         return NSImage(contentsOf: out)
+    }
+
+    /// Lazily build a visual timeline only for clips the user opens. A library
+    /// with thousands of recordings therefore pays no up-front filmstrip cost.
+    func prepareTimelineFilmstrip(for clip: Clip) {
+        guard clip.timelineFilmstrip == nil,
+              let duration = clip.info?.duration, duration > 0,
+              !filmstripsInFlight.contains(clip.url) else { return }
+        let out = Self.cacheRoot.appendingPathComponent(
+            "filmstrip-\(Self.cacheKey(for: clip.url)).jpg")
+        if let cached = NSImage(contentsOf: out) {
+            clip.timelineFilmstrip = cached
+            return
+        }
+        filmstripsInFlight.insert(clip.url)
+        let clipURL = clip.url
+        Task.detached(priority: .utility) {
+            let args = TimelineFilmstripBuilder.command(
+                source: clip.url, duration: duration, output: out)
+            let generated = (try? FFmpeg.run(args)) != nil
+            if generated { Self.enforceCacheCap(keeping: out) }
+            await MainActor.run { [weak self, weak clip] in
+                self?.filmstripsInFlight.remove(clipURL)
+                if generated, let image = NSImage(contentsOf: out) {
+                    clip?.timelineFilmstrip = image
+                    self?.refreshCacheSize()
+                }
+            }
+        }
     }
 
     // MARK: Preview cache (lossless remux so AVPlayer can open it)

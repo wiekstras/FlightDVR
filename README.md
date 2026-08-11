@@ -19,6 +19,8 @@ it, and add eased speed ramps.
 - **Preview natively** — `.ts` files are losslessly remuxed into a cache with the
   `hvc1` tag, which is the one thing AVFoundation needs to play HDZero's HEVC.
   No VLC, no re-encode, instant after the first open.
+- **Navigate visually** — opening a recording lazily generates a cached timeline
+  filmstrip, while unopened library items incur no extra decoding work.
 - **Edit** — per clip:
   - trim in/out points
   - **cut ranges out of the middle** (as many as you like)

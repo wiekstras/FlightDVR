@@ -77,6 +77,15 @@ enum SelfTest {
         guard Clip(url: nestedClip, fileDate: injectedDate).flightDate == injectedDate else {
             throw Failure("clip ignored preloaded scan metadata")
         }
+        let filmstripOut = workDir.appendingPathComponent("filmstrip.jpg")
+        let filmstripCommand = TimelineFilmstripBuilder.command(
+            source: nestedClip, duration: 10, output: filmstripOut, frameCount: 6)
+        guard filmstripCommand.filter({ $0 == "-i" }).count == 6,
+              filmstripCommand.contains(where: { $0.contains("hstack=inputs=6") }),
+              filmstripCommand.contains(where: { $0.contains("select=gte(n\\,12)") }),
+              filmstripCommand.last == filmstripOut.path else {
+            throw Failure("timeline filmstrip command did not sample the full recording")
+        }
         print("recursive scan ok: found nested clip at DCIM/100MEDIA")
 
         // 2. Probe it.

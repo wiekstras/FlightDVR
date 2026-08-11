@@ -119,27 +119,76 @@ enum OutputNamer {
     }
 }
 
+enum ExportOutput {
+    static func stagingURL(for outputURL: URL, jobID: UUID) -> URL {
+        let ext = outputURL.pathExtension
+        let base = outputURL.deletingPathExtension().lastPathComponent
+        return outputURL.deletingLastPathComponent()
+            .appendingPathComponent(".\(base).\(jobID.uuidString).partial.\(ext)")
+    }
+
+    static func promote(stagingURL: URL, to outputURL: URL) throws {
+        guard FileManager.default.fileExists(atPath: stagingURL.path) else {
+            throw FFmpeg.ProcessError(command: "export", stderr: "Encoder produced no output file.")
+        }
+        if FileManager.default.fileExists(atPath: outputURL.path) {
+            _ = try FileManager.default.replaceItemAt(outputURL, withItemAt: stagingURL)
+        } else {
+            try FileManager.default.moveItem(at: stagingURL, to: outputURL)
+        }
+    }
+}
+
 // MARK: - Jobs
+
+enum ExportState: Equatable, Codable {
+    case waiting, running, done, cancelled
+    case failed(String)
+
+    var canRetry: Bool {
+        switch self {
+        case .cancelled, .failed: true
+        case .waiting, .running, .done: false
+        }
+    }
+
+    var isFailure: Bool {
+        if case .failed = self { return true }
+        return false
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, message }
+    private enum Kind: String, Codable { case waiting, running, done, cancelled, failed }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        switch try values.decode(Kind.self, forKey: .kind) {
+        case .waiting: self = .waiting
+        case .running: self = .running
+        case .done: self = .done
+        case .cancelled: self = .cancelled
+        case .failed: self = .failed(try values.decode(String.self, forKey: .message))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .waiting: try values.encode(Kind.waiting, forKey: .kind)
+        case .running: try values.encode(Kind.running, forKey: .kind)
+        case .done: try values.encode(Kind.done, forKey: .kind)
+        case .cancelled: try values.encode(Kind.cancelled, forKey: .kind)
+        case .failed(let message):
+            try values.encode(Kind.failed, forKey: .kind)
+            try values.encode(message, forKey: .message)
+        }
+    }
+}
 
 @MainActor
 final class ExportJob: ObservableObject, Identifiable {
-    enum State: Equatable {
-        case waiting, running, done, cancelled
-        case failed(String)
-
-        var canRetry: Bool {
-            switch self {
-            case .cancelled, .failed: true
-            case .waiting, .running, .done: false
-            }
-        }
-
-        var isFailure: Bool {
-            if case .failed = self { return true }
-            return false
-        }
-    }
-    let id = UUID()
+    typealias State = ExportState
+    let id: UUID
     let clips: [Clip]
     let settings: ExportSettings
     let outputURL: URL
@@ -151,11 +200,94 @@ final class ExportJob: ObservableObject, Identifiable {
     var isStitch: Bool { clips.count > 1 }
     var displayName: String { isStitch ? "Sequence (\(clips.count) clips)" : clip.name }
 
-    init(clips: [Clip], settings: ExportSettings, outputURL: URL) {
+    var stagingURL: URL {
+        ExportOutput.stagingURL(for: outputURL, jobID: id)
+    }
+
+    init(id: UUID = UUID(), clips: [Clip], settings: ExportSettings, outputURL: URL,
+         state: State = .waiting, progress: Double = 0) {
         precondition(!clips.isEmpty, "an export needs at least one clip")
+        self.id = id
         self.clips = clips
         self.settings = settings
         self.outputURL = outputURL
+        self.state = state
+        self.progress = progress
+    }
+}
+
+struct ExportClipSnapshot: Codable, Equatable {
+    var url: URL
+    var info: ClipInfo?
+    var edit: EditPlan
+}
+
+struct ExportJobSnapshot: Codable, Equatable {
+    var id: UUID
+    var clips: [ExportClipSnapshot]
+    var settings: ExportSettings
+    var outputURL: URL
+    var state: ExportState
+    var progress: Double
+
+    @MainActor init(job: ExportJob) {
+        id = job.id
+        clips = job.clips.map { ExportClipSnapshot(url: $0.url, info: $0.info, edit: $0.edit) }
+        settings = job.settings
+        outputURL = job.outputURL
+        state = job.state
+        progress = job.progress
+    }
+
+    init(id: UUID, clips: [ExportClipSnapshot], settings: ExportSettings, outputURL: URL,
+         state: ExportState, progress: Double) {
+        self.id = id
+        self.clips = clips
+        self.settings = settings
+        self.outputURL = outputURL
+        self.state = state
+        self.progress = progress
+    }
+
+    func recoveringInterruptedEncode() -> ExportJobSnapshot {
+        guard state == .running else { return self }
+        var copy = self
+        copy.state = .failed("Export was interrupted. The incomplete staging file was removed; retry when ready.")
+        copy.progress = 0
+        return copy
+    }
+}
+
+private struct ExportQueueJournal: Codable {
+    static let currentVersion = 1
+    var version = currentVersion
+    var jobs: [ExportJobSnapshot]
+}
+
+enum ExportQueueStore {
+    static let defaultURL: URL = {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("FlightStudio", isDirectory: true)
+            .appendingPathComponent("export-queue.json")
+    }()
+
+    static func load(from url: URL) throws -> [ExportJobSnapshot] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let journal = try JSONDecoder().decode(ExportQueueJournal.self,
+                                               from: Data(contentsOf: url))
+        guard journal.version == ExportQueueJournal.currentVersion else {
+            throw FFmpeg.ProcessError(command: "export queue",
+                                      stderr: "Unsupported export queue version \(journal.version).")
+        }
+        return journal.jobs.map { $0.recoveringInterruptedEncode() }
+    }
+
+    static func save(_ snapshots: [ExportJobSnapshot], to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(ExportQueueJournal(jobs: snapshots)).write(to: url, options: .atomic)
     }
 }
 
@@ -164,6 +296,48 @@ final class ExportQueue: ObservableObject {
     @Published var jobs: [ExportJob] = []
     @Published var isRunning = false
     @Published var currentMessage = ""
+    @Published private(set) var persistenceError: String?
+    private let persistenceURL: URL
+    private var saveWorkItem: DispatchWorkItem?
+
+    init(persistenceURL: URL = ExportQueueStore.defaultURL) {
+        self.persistenceURL = persistenceURL
+        do {
+            jobs = try ExportQueueStore.load(from: persistenceURL).compactMap { snapshot in
+                guard !snapshot.clips.isEmpty else { return nil }
+                let clips = snapshot.clips.map { saved -> Clip in
+                    let clip = Clip(url: saved.url)
+                    clip.info = saved.info
+                    clip.edit = saved.edit
+                    clip.clearEditHistory()
+                    return clip
+                }
+                var state = snapshot.state
+                if state == .done && !FileManager.default.fileExists(atPath: snapshot.outputURL.path) {
+                    state = .failed("The completed export file is missing.")
+                } else if state != .done,
+                          clips.contains(where: { !FileManager.default.fileExists(atPath: $0.url.path) }) {
+                    state = .failed("One or more source recordings are missing or disconnected.")
+                }
+                let job = ExportJob(id: snapshot.id, clips: clips, settings: snapshot.settings,
+                                    outputURL: snapshot.outputURL, state: state,
+                                    progress: snapshot.progress)
+                try? FileManager.default.removeItem(at: job.stagingURL)
+                return job
+            }
+        } catch {
+            jobs = []
+            persistenceError = "Export queue could not be restored: \(error.localizedDescription)"
+        }
+        if persistenceError == nil, !jobs.isEmpty {
+            do {
+                try ExportQueueStore.save(jobs.map { ExportJobSnapshot(job: $0) },
+                                          to: persistenceURL)
+            } catch {
+                persistenceError = "Recovered export queue could not be saved: \(error.localizedDescription)"
+            }
+        }
+    }
 
     func enqueue(clips: [Clip], settings: ExportSettings) {
         let folder = settings.resolvedOutputFolder
@@ -175,6 +349,7 @@ final class ExportQueue: ObservableObject {
                                              reserved: Set(jobs.map(\.outputURL)))
             jobs.append(ExportJob(clips: [clip], settings: settings, outputURL: out))
         }
+        persist()
     }
 
     /// Join the selected clips in their current list order into one H.264
@@ -192,19 +367,24 @@ final class ExportQueue: ObservableObject {
                                         fileExtension: stitchSettings.preset.fileExtension,
                                         reserved: Set(jobs.map(\.outputURL)))
         jobs.append(ExportJob(clips: clips, settings: stitchSettings, outputURL: out))
+        persist()
     }
 
     func remove(_ job: ExportJob) {
         if job.state == .running { job.cancelFlag = true }
+        try? FileManager.default.removeItem(at: job.stagingURL)
         jobs.removeAll { $0.id == job.id }
+        persist()
     }
 
     func clearFinished() {
         jobs.removeAll { $0.state == .done || $0.state == .cancelled }
+        persist()
     }
 
     func clearFailed() {
         jobs.removeAll { $0.state.isFailure }
+        persist()
     }
 
     func cancel(_ job: ExportJob) { job.cancelFlag = true }
@@ -222,6 +402,7 @@ final class ExportQueue: ObservableObject {
                 break
             }
         }
+        persist()
     }
 
     /// Put a cancelled or failed job back in the queue without making the user
@@ -231,6 +412,8 @@ final class ExportQueue: ObservableObject {
         job.cancelFlag = false
         job.progress = 0
         job.state = .waiting
+        try? FileManager.default.removeItem(at: job.stagingURL)
+        persist()
     }
 
     /// Move a waiting export relative to the other waiting jobs. Completed and
@@ -241,6 +424,7 @@ final class ExportQueue: ObservableObject {
         let destination = current + offset
         guard waitingIndices.indices.contains(destination) else { return }
         jobs.swapAt(waitingIndices[current], waitingIndices[destination])
+        persist()
     }
 
     func start() {
@@ -252,25 +436,48 @@ final class ExportQueue: ObservableObject {
     private func runLoop() async {
         while let job = jobs.first(where: { $0.state == .waiting }) {
             job.state = .running
+            job.progress = 0
+            try? FileManager.default.removeItem(at: job.stagingURL)
+            persist()
             currentMessage = "Exporting \(job.displayName)…"
             do {
                 try await runJob(job)
-                job.state = job.cancelFlag ? .cancelled : .done
+                if job.cancelFlag { throw CancellationError() }
+                try promoteStagingOutput(for: job)
+                job.state = .done
                 job.progress = 1
             } catch is CancellationError {
                 job.state = .cancelled
-                // Never leave a broken file behind: a cancelled encode is deleted.
-                try? FileManager.default.removeItem(at: job.outputURL)
+                try? FileManager.default.removeItem(at: job.stagingURL)
             } catch {
                 job.state = .failed(error.localizedDescription)
-                try? FileManager.default.removeItem(at: job.outputURL)
+                try? FileManager.default.removeItem(at: job.stagingURL)
             }
+            persist()
         }
         isRunning = false
         currentMessage = ""
     }
 
+    /// The final filename is never exposed until ffmpeg has completed. Existing
+    /// exports remain intact if a replacement encode fails or the app crashes.
+    private func promoteStagingOutput(for job: ExportJob) throws {
+        try ExportOutput.promote(stagingURL: job.stagingURL, to: job.outputURL)
+    }
+
     private func runJob(_ job: ExportJob) async throws {
+        // Overwrite protection applies equally to single clips and stitches.
+        if FileManager.default.fileExists(atPath: job.outputURL.path) {
+            let replaced = job.outputURL
+            let alert = NSAlert()
+            alert.messageText = "\(replaced.lastPathComponent) already exists"
+            alert.informativeText = "Replace it after the new export finishes, or skip this job?"
+            alert.addButton(withTitle: "Replace After Export")
+            alert.addButton(withTitle: "Skip")
+            if alert.runModal() != .alertFirstButtonReturn {
+                throw CancellationError()
+            }
+        }
         if job.isStitch {
             try await runStitchJob(job)
             return
@@ -285,29 +492,19 @@ final class ExportQueue: ObservableObject {
         }
         let outDur = max(plan.outputDuration(duration: info.duration), 0.01)
 
-        // Overwrite protection: exports never silently replace an existing file.
-        if FileManager.default.fileExists(atPath: job.outputURL.path) {
-            let replaced = job.outputURL
-            let alert = NSAlert()
-            alert.messageText = "\(replaced.lastPathComponent) already exists"
-            alert.informativeText = "Overwrite it, or skip this clip?"
-            alert.addButton(withTitle: "Overwrite")
-            alert.addButton(withTitle: "Skip")
-            if alert.runModal() != .alertFirstButtonReturn {
-                throw CancellationError()
-            }
-        }
-
         let commands = ExportCommandBuilder.build(
             plan: plan, settings: settings, info: info,
-            source: job.clip.url, output: job.outputURL, jobID: job.id)
+            source: job.clip.url, output: job.stagingURL, jobID: job.id)
         let passes = Double(commands.count)
         for (index, args) in commands.enumerated() {
             let passBase = Double(index) / passes
             _ = try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
                 try FFmpeg.run(args, onProgressSeconds: { seconds in
                     let p = passBase + min(seconds / outDur, 1) / passes
-                    Task { @MainActor in cancel.progress = p }
+                    Task { @MainActor in
+                        cancel.progress = p
+                        self.schedulePersistence()
+                    }
                 }, isCancelled: { cancel.cancelFlag })
             }.value
         }
@@ -321,12 +518,33 @@ final class ExportQueue: ObservableObject {
             return (clip.url, info)
         }
         let totalDuration = max(inputs.reduce(0) { $0 + $1.1.duration }, 0.01)
-        let args = try StitchCommandBuilder.build(inputs: inputs, settings: job.settings, output: job.outputURL)
+        let args = try StitchCommandBuilder.build(inputs: inputs, settings: job.settings,
+                                                  output: job.stagingURL)
         _ = try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
             try FFmpeg.run(args, onProgressSeconds: { seconds in
-                Task { @MainActor in cancel.progress = min(seconds / totalDuration, 1) }
+                Task { @MainActor in
+                    cancel.progress = min(seconds / totalDuration, 1)
+                    self.schedulePersistence()
+                }
             }, isCancelled: { cancel.cancelFlag })
         }.value
+    }
+
+    private func schedulePersistence() {
+        saveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.persist() }
+        saveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+
+    private func persist() {
+        saveWorkItem?.cancel()
+        do {
+            try ExportQueueStore.save(jobs.map { ExportJobSnapshot(job: $0) }, to: persistenceURL)
+            persistenceError = nil
+        } catch {
+            persistenceError = "Export queue could not be saved: \(error.localizedDescription)"
+        }
     }
 
 }

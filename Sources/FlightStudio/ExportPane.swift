@@ -148,6 +148,11 @@ struct ExportPane: View {
                                 .controlSize(.small)
                         }
                     }
+                    if let persistenceError = queue.persistenceError {
+                        Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
                 }
             }
             .padding(14)

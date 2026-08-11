@@ -228,6 +228,51 @@ enum SelfTest {
         }
         print("output naming ok")
 
+        // Export jobs survive relaunches with their exact edit and probe data.
+        // A running job recovers as retryable, never as a completed output.
+        let exportJobID = UUID()
+        let exportSnapshot = ExportJobSnapshot(
+            id: exportJobID,
+            clips: [ExportClipSnapshot(url: src, info: info, edit: plan)],
+            settings: ExportSettings(), outputURL: first, state: .running, progress: 0.6)
+        let exportJournalURL = workDir.appendingPathComponent("export-queue.json")
+        try ExportQueueStore.save([exportSnapshot], to: exportJournalURL)
+        let recoveredExports = try ExportQueueStore.load(from: exportJournalURL)
+        guard recoveredExports.count == 1,
+              recoveredExports[0].id == exportJobID,
+              recoveredExports[0].clips[0].edit == plan,
+              recoveredExports[0].clips[0].info == info,
+              recoveredExports[0].state == .failed(
+                "Export was interrupted. The incomplete staging file was removed; retry when ready."),
+              recoveredExports[0].progress == 0 else {
+            throw Failure("export queue journal did not recover an interrupted encode")
+        }
+        let corruptExportJournal = workDir.appendingPathComponent("corrupt-export-queue.json")
+        try Data(#"{"version":99,"jobs":[]}"#.utf8).write(to: corruptExportJournal)
+        var rejectedUnknownJournal = false
+        do {
+            _ = try ExportQueueStore.load(from: corruptExportJournal)
+        } catch {
+            rejectedUnknownJournal = true
+        }
+        guard rejectedUnknownJournal else {
+            throw Failure("unsupported export queue journal version was accepted")
+        }
+
+        // Final outputs are promoted only after a complete staging file exists,
+        // and replacing an export never exposes half-written bytes.
+        try FileManager.default.createDirectory(at: exportFolder, withIntermediateDirectories: true)
+        let promoted = exportFolder.appendingPathComponent("atomic.mp4")
+        let staging = ExportOutput.stagingURL(for: promoted, jobID: exportJobID)
+        try Data("old".utf8).write(to: promoted)
+        try Data("new".utf8).write(to: staging)
+        try ExportOutput.promote(stagingURL: staging, to: promoted)
+        guard try Data(contentsOf: promoted) == Data("new".utf8),
+              !FileManager.default.fileExists(atPath: staging.path) else {
+            throw Failure("staged export was not promoted atomically")
+        }
+        print("export queue recovery and atomic output promotion ok")
+
         // 3h. Source↔output time mapping must round-trip through cuts and ramps.
         for t in stride(from: plan.inPoint, to: 9.0, by: 0.25) {
             // Cut interiors and their boundaries legitimately collapse to one output time.

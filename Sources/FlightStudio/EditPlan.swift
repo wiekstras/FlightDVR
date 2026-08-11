@@ -2,14 +2,14 @@ import Foundation
 
 /// A cut range removed from the middle of a clip.
 struct CutRange: Identifiable, Equatable, Codable {
-    let id = UUID()
+    var id = UUID()
     var start: Double
     var end: Double
 }
 
 /// A zone played at a different speed, with eased ramps at both edges.
 struct SpeedZone: Identifiable, Equatable, Codable {
-    let id = UUID()
+    var id = UUID()
     var start: Double
     var end: Double
     var speed: Double        // 2.0 = twice as fast, 0.5 = half speed

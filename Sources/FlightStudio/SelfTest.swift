@@ -111,6 +111,15 @@ enum SelfTest {
         }
         print("date parsing ok")
 
+        // 3b. Favorites survive a rescan/relaunch through library metadata.
+        let favoriteClip = Clip(url: src)
+        favoriteClip.favorite = false
+        favoriteClip.favorite = true
+        guard Clip(url: src).favorite else {
+            throw Failure("favorite metadata was not persisted")
+        }
+        print("favorite persistence ok")
+
         // 3c. Invalid timeline data is normalised before it can reach ffmpeg.
         var messy = EditPlan(inPoint: -2, outPoint: 99,
                              cuts: [CutRange(start: 2, end: 4), CutRange(start: 3, end: 6),

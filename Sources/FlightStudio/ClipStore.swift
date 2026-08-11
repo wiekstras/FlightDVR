@@ -2,6 +2,32 @@ import SwiftUI
 import Combine
 import CryptoKit
 
+private struct ClipLibraryRecord: Codable {
+    var favorite = false
+}
+
+private enum ClipLibraryMetadata {
+    private static let key = "clipLibraryMetadata-v1"
+
+    static func record(for url: URL) -> ClipLibraryRecord {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let records = try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)
+        else { return ClipLibraryRecord() }
+        return records[url.standardizedFileURL.path] ?? ClipLibraryRecord()
+    }
+
+    static func save(_ record: ClipLibraryRecord, for url: URL) {
+        var records: [String: ClipLibraryRecord] = [:]
+        if let data = UserDefaults.standard.data(forKey: key) {
+            records = (try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)) ?? [:]
+        }
+        records[url.standardizedFileURL.path] = record
+        if let data = try? JSONEncoder().encode(records) {
+            UserDefaults.standard.set(data, forKey: key)
+        }
+    }
+}
+
 final class Clip: ObservableObject, Identifiable, Hashable {
     let id: URL
     let url: URL
@@ -18,6 +44,12 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         }
     }
     @Published var relativeName: String = ""   // path relative to the scanned folder
+    @Published var favorite = false {
+        didSet {
+            guard favorite != oldValue else { return }
+            ClipLibraryMetadata.save(ClipLibraryRecord(favorite: favorite), for: url)
+        }
+    }
     private var undoEdits: [EditPlan] = []
     private var redoEdits: [EditPlan] = []
     private var restoringEdit = false
@@ -32,6 +64,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         self.fileDate = (attrs?[.creationDate] ?? attrs?[.modificationDate]) as? Date ?? .distantPast
         self.parsedDate = Clip.parseDate(from: url.lastPathComponent)
+        self.favorite = ClipLibraryMetadata.record(for: url).favorite
     }
 
     var name: String { url.lastPathComponent }
@@ -116,14 +149,16 @@ final class ClipStore: ObservableObject {
     @Published var sortOrder: SortOrder = .date
     @Published var reverseSort = false
     @Published var searchQuery = ""
+    @Published var favoritesOnly = false
     @Published var previewCacheBytes: Int64 = 0
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let searchable = query.isEmpty ? clips : clips.filter {
+        let matched = query.isEmpty ? clips : clips.filter {
             $0.relativeName.localizedCaseInsensitiveContains(query)
         }
+        let searchable = favoritesOnly ? matched.filter(\.favorite) : matched
         let ordered: [Clip]
         switch sortOrder {
         case .date:
@@ -447,6 +482,11 @@ final class ClipStore: ObservableObject {
 
     func invertTicks() {
         for c in clips { c.ticked.toggle() }
+        objectWillChange.send()
+    }
+
+    func toggleFavorite(_ clip: Clip) {
+        clip.favorite.toggle()
         objectWillChange.send()
     }
 

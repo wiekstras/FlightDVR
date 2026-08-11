@@ -155,6 +155,11 @@ struct ClipListView: View {
                     Image(systemName: store.reverseSort ? "arrow.up" : "arrow.down")
                 }
                 .help("Reverse sort order")
+                Toggle(isOn: $store.favoritesOnly) {
+                    Image(systemName: store.favoritesOnly ? "star.fill" : "star")
+                }
+                .toggleStyle(.button)
+                .help("Show favorites only")
             }
             .padding(8)
             TextField("Filter clips", text: $store.searchQuery)
@@ -231,6 +236,7 @@ struct ClipListView: View {
 
 struct ClipRow: View {
     @ObservedObject var clip: Clip
+    @EnvironmentObject var store: ClipStore
 
     var body: some View {
         HStack(spacing: 10) {
@@ -250,6 +256,14 @@ struct ClipRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
+                    Button {
+                        store.toggleFavorite(clip)
+                    } label: {
+                        Image(systemName: clip.favorite ? "star.fill" : "star")
+                            .foregroundStyle(clip.favorite ? .yellow : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(clip.favorite ? "Remove favorite" : "Mark favorite")
                     Text(clip.name)
                         .font(.callout.weight(.medium).monospacedDigit())
                     if !clip.edit.isDefault {

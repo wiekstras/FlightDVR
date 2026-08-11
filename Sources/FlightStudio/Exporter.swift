@@ -92,6 +92,13 @@ final class ExportJob: ObservableObject, Identifiable {
     enum State: Equatable {
         case waiting, running, done, cancelled
         case failed(String)
+
+        var canRetry: Bool {
+            switch self {
+            case .cancelled, .failed: true
+            case .waiting, .running, .done: false
+            }
+        }
     }
     let id = UUID()
     let clip: Clip
@@ -138,6 +145,15 @@ final class ExportQueue: ObservableObject {
     }
 
     func cancel(_ job: ExportJob) { job.cancelFlag = true }
+
+    /// Put a cancelled or failed job back in the queue without making the user
+    /// reselect its clip and export settings.
+    func retry(_ job: ExportJob) {
+        guard job.state.canRetry else { return }
+        job.cancelFlag = false
+        job.progress = 0
+        job.state = .waiting
+    }
 
     func start() {
         guard !isRunning else { return }

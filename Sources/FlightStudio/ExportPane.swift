@@ -176,8 +176,14 @@ struct QueueRow: View {
                         Image(systemName: "magnifyingglass.circle")
                     }
                     .buttonStyle(.plain)
-                default:
-                    EmptyView()
+                case .cancelled, .failed:
+                    Button {
+                        queue.retry(job)
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Retry export")
                 }
             }
             if job.state == .running {

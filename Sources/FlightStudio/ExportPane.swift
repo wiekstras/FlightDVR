@@ -138,8 +138,8 @@ struct QueueList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(queue.jobs) { job in
-                QueueRow(job: job)
+            ForEach(Array(queue.jobs.enumerated()), id: \.element.id) { index, job in
+                QueueRow(job: job, position: index + 1)
             }
             if queue.jobs.isEmpty {
                 Text("Tick clips, then add them here.")
@@ -153,6 +153,7 @@ struct QueueList: View {
 struct QueueRow: View {
     @ObservedObject var job: ExportJob
     @EnvironmentObject var queue: ExportQueue
+    let position: Int
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -161,6 +162,11 @@ struct QueueRow: View {
                 Text(job.outputURL.lastPathComponent)
                     .font(.callout)
                     .lineLimit(1)
+                if job.state == .waiting {
+                    Text("#\(position)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 switch job.state {
                 case .running:

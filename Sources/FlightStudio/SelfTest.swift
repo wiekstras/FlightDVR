@@ -589,6 +589,24 @@ enum SelfTest {
             .contains(where: { $0.severity == .error && $0.message.contains("expected 1080×1920") }) else {
             throw Failure("wrong social delivery canvas passed publishing preflight")
         }
+        let invalidTikTokMedia = ClipInfo(duration: 601, width: 1080, height: 1920, fps: 120,
+                                          videoCodec: "h264", hasAudio: true,
+                                          colorRange: "tv", fileSize: 4_000_000_001)
+        let tiktokLimits = PlatformMediaValidator.validate(invalidTikTokMedia, for: .tiktok)
+        guard tiktokLimits.filter({ $0.severity == .error }).count == 3,
+              tiktokLimits.contains(where: { $0.message.contains("10 minutes") }),
+              tiktokLimits.contains(where: { $0.message.contains("4 GB") }),
+              tiktokLimits.contains(where: { $0.message.contains("23 and 60 FPS") }) else {
+            throw Failure("TikTok API media constraints did not reject an invalid export")
+        }
+        var longTikTokMedia = invalidTikTokMedia
+        longTikTokMedia.duration = 181
+        longTikTokMedia.fps = 60
+        longTikTokMedia.fileSize = 10_000_000
+        guard PlatformMediaValidator.validate(longTikTokMedia, for: .tiktok)
+            .contains(where: { $0.severity == .warning && $0.message.contains("over 3 minutes") }) else {
+            throw Failure("TikTok account-dependent duration warning was missing")
+        }
         var instagramDraft = PublishDraft()
         instagramDraft.title = "Square post"
         instagramDraft.platforms = [.instagram]

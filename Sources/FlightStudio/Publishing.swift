@@ -64,6 +64,46 @@ struct PublishIssue: Identifiable, Equatable {
     let message: String
 }
 
+/// Hard API delivery limits live beside publishing rather than leaking into
+/// export presets. Providers may add account-specific checks after OAuth.
+enum PlatformMediaValidator {
+    static func validate(_ media: ClipInfo, for platform: PublishingPlatform) -> [PublishIssue] {
+        switch platform {
+        case .tiktok:
+            var issues: [PublishIssue] = []
+            if media.duration > 600 {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "TikTok API uploads cannot exceed 10 minutes."))
+            } else if media.duration > 180 {
+                issues.append(PublishIssue(
+                    severity: .warning,
+                    message: "TikTok may ask the creator to trim videos over 3 minutes, depending on the account."))
+            }
+            if media.fileSize > 4_000_000_000 {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "TikTok API uploads cannot exceed 4 GB."))
+            }
+            if media.fps < 23 || media.fps > 60 {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "TikTok requires a frame rate between 23 and 60 FPS."))
+            }
+            if media.width < 360 || media.height < 360 || media.width > 4_096 || media.height > 4_096 {
+                issues.append(PublishIssue(
+                    severity: .error,
+                    message: "TikTok requires each video dimension to be between 360 and 4,096 pixels."))
+            }
+            return issues
+        case .youtube:
+            return media.fileSize > 256_000_000_000
+                ? [PublishIssue(severity: .error,
+                                message: "YouTube API uploads cannot exceed 256 GB.")]
+                : []
+        case .instagram:
+            return []
+        }
+    }
+}
+
 /// Validates the planned output before anything is encoded or uploaded. The
 /// checks are conservative so providers can add requirements independently.
 enum PublishValidator {
@@ -104,6 +144,9 @@ enum PublishValidator {
                     issues.append(PublishIssue(severity: .error,
                                                message: "Social delivery requires an H.264 export."))
                 }
+            }
+            for platform in draft.platforms {
+                issues += PlatformMediaValidator.validate(media, for: platform)
             }
         }
         let shortVertical = settings.preset == .social && settings.socialProfile.isShortVertical

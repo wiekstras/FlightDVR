@@ -60,7 +60,8 @@ it, and add eased speed ramps.
   return as explicit retryable failures instead of disappearing. One Publish
   click starts every destination, and one failed platform can retry independently.
 - **Recoverable publishing composer** — titles, captions, hashtags, visibility
-  and platform choices are saved while typing, with live delivery preflight.
+  and platform choices are saved while typing, with live delivery preflight for
+  canvas, codec, duration, frame rate, dimensions and API file-size limits.
 - **Crash-safe exports** — queued export jobs survive relaunches, including
   their edit instructions and media metadata. Encoders write to private staging
   files, verify the result with ffprobe, and atomically promote it only after

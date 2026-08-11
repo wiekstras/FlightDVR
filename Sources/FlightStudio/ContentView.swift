@@ -20,7 +20,12 @@ struct ContentView: View {
                             .frame(minHeight: 250, maxHeight: 320)
                     }
                     .layoutPriority(1)
-                    ExportPane()
+                    TabView {
+                        ExportPane()
+                            .tabItem { Label("Export", systemImage: "square.and.arrow.up") }
+                        PublishPane()
+                            .tabItem { Label("Publish", systemImage: "paperplane") }
+                    }
                         .frame(minWidth: 300, maxWidth: 340)
                 }
             } else {

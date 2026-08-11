@@ -128,9 +128,10 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     @Published var edit = EditPlan() {
         didSet {
             guard !restoringEdit, edit != oldValue else { return }
-            undoEdits.append(oldValue)
-            if undoEdits.count > 100 { undoEdits.removeFirst(undoEdits.count - 100) }
-            redoEdits.removeAll()
+            if editTransactionBaseline == nil {
+                appendUndo(oldValue)
+                redoEdits.removeAll()
+            }
             scheduleEditPersistence()
         }
     }
@@ -149,6 +150,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     }
     private var undoEdits: [EditPlan] = []
     private var redoEdits: [EditPlan] = []
+    private var editTransactionBaseline: EditPlan?
     private var restoringEdit = false
     private var editSaveWorkItem: DispatchWorkItem?
     private let isLibraryBacked: Bool
@@ -188,7 +190,24 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     var canUndoEdit: Bool { !undoEdits.isEmpty }
     var canRedoEdit: Bool { !redoEdits.isEmpty }
 
+    /// Groups a continuous UI gesture (for example a trim-handle drag or audio
+    /// slider movement) into one useful undo step instead of one step per pixel.
+    func beginEditTransaction() {
+        guard editTransactionBaseline == nil else { return }
+        editTransactionBaseline = edit
+    }
+
+    func endEditTransaction() {
+        guard let baseline = editTransactionBaseline else { return }
+        editTransactionBaseline = nil
+        guard edit != baseline else { return }
+        appendUndo(baseline)
+        redoEdits.removeAll()
+        scheduleEditPersistence()
+    }
+
     func undoEdit() {
+        endEditTransaction()
         guard let previous = undoEdits.popLast() else { return }
         restoringEdit = true
         redoEdits.append(edit)
@@ -198,6 +217,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     }
 
     func redoEdit() {
+        endEditTransaction()
         guard let next = redoEdits.popLast() else { return }
         restoringEdit = true
         undoEdits.append(edit)
@@ -207,8 +227,14 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     }
 
     func clearEditHistory() {
+        editTransactionBaseline = nil
         undoEdits.removeAll()
         redoEdits.removeAll()
+    }
+
+    private func appendUndo(_ previous: EditPlan) {
+        undoEdits.append(previous)
+        if undoEdits.count > 100 { undoEdits.removeFirst(undoEdits.count - 100) }
     }
 
     func addTag(_ tag: String) {

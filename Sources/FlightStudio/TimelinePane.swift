@@ -395,7 +395,8 @@ private struct TitleControls: View {
                         VStack(spacing: 12) {
                             ForEach(titles.indices, id: \.self) { index in
                                 VStack(alignment: .leading, spacing: 8) {
-                                    TextField("Title", text: titleBinding(index, \.text))
+                                    TextField("Title", text: titleBinding(index, \.text),
+                                              onEditingChanged: editTransaction)
                                     Picker("Position", selection: titleBinding(index, \.position)) {
                                         ForEach(TitlePosition.allCases) { Text($0.rawValue).tag($0) }
                                     }
@@ -491,6 +492,10 @@ private struct TitleControls: View {
     private func timecode(_ seconds: Double) -> String {
         EditorTimecode.string(seconds: seconds, fps: clip.info?.fps ?? 0)
     }
+
+    private func editTransaction(_ editing: Bool) {
+        editing ? clip.beginEditTransaction() : clip.endEditTransaction()
+    }
 }
 
 private struct AudioControls: View {
@@ -513,16 +518,19 @@ private struct AudioControls: View {
                         .foregroundStyle(.secondary)
                 } else {
                     LabeledContent("Volume") {
-                        Slider(value: audioBinding(\.volume), in: 0...1)
+                        Slider(value: audioBinding(\.volume), in: 0...1,
+                               onEditingChanged: editTransaction)
                             .frame(width: 150)
                     }
                     Toggle("Mute recording", isOn: audioBinding(\.isMuted))
                     LabeledContent("Fade in") {
-                        Slider(value: audioBinding(\.fadeIn), in: 0...10, step: 0.25)
+                        Slider(value: audioBinding(\.fadeIn), in: 0...10, step: 0.25,
+                               onEditingChanged: editTransaction)
                             .frame(width: 150)
                     }
                     LabeledContent("Fade out") {
-                        Slider(value: audioBinding(\.fadeOut), in: 0...10, step: 0.25)
+                        Slider(value: audioBinding(\.fadeOut), in: 0...10, step: 0.25,
+                               onEditingChanged: editTransaction)
                             .frame(width: 150)
                     }
                     Button("Reset clip audio") { clip.edit.sourceAudio = nil }
@@ -559,6 +567,10 @@ private struct AudioControls: View {
         clip.edit.sourceAudio = audio.isDefault ? nil : audio
     }
 
+    private func editTransaction(_ editing: Bool) {
+        editing ? clip.beginEditTransaction() : clip.endEditTransaction()
+    }
+
     @ViewBuilder private var musicEditor: some View {
         if let music = clip.edit.music {
             Text(music.url.deletingPathExtension().lastPathComponent)
@@ -568,21 +580,21 @@ private struct AudioControls: View {
                 Slider(value: Binding(
                     get: { clip.edit.music?.volume ?? 0.8 },
                     set: { clip.edit.music?.volume = $0 }
-                ), in: 0...1)
+                ), in: 0...1, onEditingChanged: editTransaction)
                 .frame(width: 150)
             }
             LabeledContent("Fade in") {
                 Slider(value: Binding(
                     get: { clip.edit.music?.fadeIn ?? 1 },
                     set: { clip.edit.music?.fadeIn = $0 }
-                ), in: 0...10, step: 0.25)
+                ), in: 0...10, step: 0.25, onEditingChanged: editTransaction)
                 .frame(width: 150)
             }
             LabeledContent("Fade out") {
                 Slider(value: Binding(
                     get: { clip.edit.music?.fadeOut ?? 2 },
                     set: { clip.edit.music?.fadeOut = $0 }
-                ), in: 0...10, step: 0.25)
+                ), in: 0...10, step: 0.25, onEditingChanged: editTransaction)
                 .frame(width: 150)
             }
             Toggle("Replace recording audio", isOn: Binding(
@@ -642,7 +654,9 @@ private struct EditChips: View {
                     guard let index = clip.edit.markers.firstIndex(where: { $0.id == marker.id }) else { return }
                     clip.edit.markers[index].name = name
                 }
-            ))
+            ), onEditingChanged: { editing in
+                editing ? clip.beginEditTransaction() : clip.endEditTransaction()
+            })
             .textFieldStyle(.plain)
             .font(.caption2)
             .frame(width: 72)
@@ -811,10 +825,12 @@ private struct TimelineBar: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         guard duration > 0, width > 0 else { return }
+                        clip.beginEditTransaction()
                         let raw = Double(min(max((xPos + value.translation.width) / width, 0), 1)) * duration
                         let t = TimelineMath.snappedTime(raw, fps: fps, duration: duration)
                         update(t)
                     }
+                    .onEnded { _ in clip.endEditTransaction() }
             )
             .help("Drag to trim")
     }

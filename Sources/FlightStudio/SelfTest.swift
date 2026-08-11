@@ -382,6 +382,29 @@ enum SelfTest {
         guard historyClip.edit.inPoint == 2 else {
             throw Failure("redo did not restore the edited trim")
         }
+
+        // A continuous drag or slider movement is one user action, even though
+        // SwiftUI can publish hundreds of intermediate values.
+        historyClip.clearEditHistory()
+        let transactionBaseline = historyClip.edit
+        historyClip.beginEditTransaction()
+        for step in 1...100 {
+            historyClip.edit.inPoint = 2 + Double(step) / 100
+        }
+        historyClip.endEditTransaction()
+        guard historyClip.canUndoEdit, !historyClip.canRedoEdit,
+              historyClip.edit.inPoint == 3 else {
+            throw Failure("continuous edit transaction did not retain its final value")
+        }
+        historyClip.undoEdit()
+        guard historyClip.edit == transactionBaseline, !historyClip.canUndoEdit,
+              historyClip.canRedoEdit else {
+            throw Failure("continuous edit transaction created more than one undo step")
+        }
+        historyClip.redoEdit()
+        guard historyClip.edit.inPoint == 3 else {
+            throw Failure("continuous edit transaction could not be redone")
+        }
         print("edit history ok")
 
         // 3f. Markers persist and are clamped to the editable source range.

@@ -458,6 +458,28 @@ enum SelfTest {
         }
         print("publishing queue recovery ok")
 
+        let publishSuiteName = "FlightStudio.PublishDraft.SelfTest.\(UUID().uuidString)"
+        guard let publishDefaults = UserDefaults(suiteName: publishSuiteName) else {
+            throw Failure("could not create isolated publish draft defaults")
+        }
+        defer { publishDefaults.removePersistentDomain(forName: publishSuiteName) }
+        let draftKey = "draft-test"
+        var savedDraft = PublishDraft()
+        savedDraft.title = "Final lap"
+        savedDraft.caption = "Fast DVR highlight"
+        savedDraft.hashtags = "#fpv"
+        savedDraft.visibility = .unlisted
+        savedDraft.platforms = [.youtube, .instagram]
+        PublishDraftStore.save(savedDraft, defaults: publishDefaults, key: draftKey)
+        guard PublishDraftStore.load(defaults: publishDefaults, key: draftKey) == savedDraft else {
+            throw Failure("publish composer draft did not survive persistence")
+        }
+        publishDefaults.set(Data("invalid".utf8), forKey: draftKey)
+        guard PublishDraftStore.load(defaults: publishDefaults, key: draftKey) == PublishDraft() else {
+            throw Failure("corrupt publish composer draft did not recover safely")
+        }
+        print("publish composer draft recovery ok")
+
         // 6. Social preset: two passes, lands near the target size.
         var socialSettings = ExportSettings()
         socialSettings.preset = .social

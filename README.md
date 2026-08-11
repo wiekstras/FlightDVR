@@ -55,6 +55,8 @@ it, and add eased speed ramps.
 - **Publish queue foundation** — validated multi-platform jobs are journaled to
   disk. Completed destinations survive relaunches, while interrupted uploads
   return as explicit retryable failures instead of disappearing.
+- **Recoverable publishing composer** — titles, captions, hashtags, visibility
+  and platform choices are saved while typing, with live delivery preflight.
 - **Crash-safe exports** — queued export jobs survive relaunches, including
   their edit instructions and media metadata. Encoders write to private staging
   files, verify the result with ffprobe, and atomically promote it only after

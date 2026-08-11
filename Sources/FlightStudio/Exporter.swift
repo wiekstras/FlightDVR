@@ -455,6 +455,7 @@ final class ExportQueue: ObservableObject {
                 break
             }
         }
+        objectWillChange.send()
         persist()
     }
 
@@ -467,6 +468,7 @@ final class ExportQueue: ObservableObject {
         job.outputInfo = nil
         job.state = .waiting
         try? FileManager.default.removeItem(at: job.stagingURL)
+        objectWillChange.send()
         persist()
     }
 
@@ -492,6 +494,7 @@ final class ExportQueue: ObservableObject {
             job.state = .running
             job.progress = 0
             job.outputInfo = nil
+            objectWillChange.send()
             try? FileManager.default.removeItem(at: job.stagingURL)
             persist()
             currentMessage = "Exporting \(job.displayName)…"
@@ -509,6 +512,7 @@ final class ExportQueue: ObservableObject {
                 job.state = .failed(error.localizedDescription)
                 try? FileManager.default.removeItem(at: job.stagingURL)
             }
+            objectWillChange.send()
             persist()
         }
         isRunning = false

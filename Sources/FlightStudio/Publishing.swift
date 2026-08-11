@@ -38,6 +38,25 @@ struct PublishDraft: Codable, Equatable {
     }
 }
 
+enum PublishDraftStore {
+    static let defaultKey = "publishComposerDraft-v1"
+
+    static func load(defaults: UserDefaults = .standard,
+                     key: String = defaultKey) -> PublishDraft {
+        guard let data = defaults.data(forKey: key),
+              let draft = try? JSONDecoder().decode(PublishDraft.self, from: data)
+        else { return PublishDraft() }
+        return draft
+    }
+
+    static func save(_ draft: PublishDraft, defaults: UserDefaults = .standard,
+                     key: String = defaultKey) {
+        if let data = try? JSONEncoder().encode(draft) {
+            defaults.set(data, forKey: key)
+        }
+    }
+}
+
 struct PublishIssue: Identifiable, Equatable {
     enum Severity: Equatable { case error, warning }
     let id = UUID()

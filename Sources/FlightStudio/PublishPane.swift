@@ -5,9 +5,14 @@ import SwiftUI
 struct PublishPane: View {
     @EnvironmentObject var exportQueue: ExportQueue
     @EnvironmentObject var publishQueue: PublishQueue
-    @State private var draft = PublishDraft()
+    @State private var draft: PublishDraft
     @State private var selectedExportID: UUID?
     @State private var issues: [PublishIssue] = []
+    @State private var draftSaveTask: Task<Void, Never>?
+
+    init() {
+        _draft = State(initialValue: PublishDraftStore.load())
+    }
 
     private var completedExports: [ExportJob] {
         exportQueue.jobs.filter { $0.state == .done }
@@ -41,7 +46,9 @@ struct PublishPane: View {
                         validationMessages
                         Button("Queue publish") { queuePublish() }
                             .buttonStyle(.borderedProminent)
-                            .disabled(selectedExport == nil)
+                            .disabled(selectedExport == nil || issues.contains(where: {
+                                $0.severity == .error
+                            }))
                     }
                 }
 
@@ -62,7 +69,32 @@ struct PublishPane: View {
             .padding(14)
         }
         .onChange(of: completedExports.map(\.id)) { _, ids in
-            if selectedExportID == nil { selectedExportID = ids.last }
+            if let selected = selectedExportID {
+                if !ids.contains(selected) { selectedExportID = ids.last }
+            } else {
+                selectedExportID = ids.last
+            }
+            refreshIssues()
+        }
+        .onChange(of: selectedExportID) { _, _ in
+            refreshIssues()
+        }
+        .onChange(of: draft) { _, newDraft in
+            refreshIssues()
+            draftSaveTask?.cancel()
+            draftSaveTask = Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                PublishDraftStore.save(newDraft)
+            }
+        }
+        .onAppear {
+            if selectedExportID == nil { selectedExportID = completedExports.last?.id }
+            refreshIssues()
+        }
+        .onDisappear {
+            draftSaveTask?.cancel()
+            PublishDraftStore.save(draft)
         }
     }
 
@@ -107,6 +139,17 @@ struct PublishPane: View {
     private func queuePublish() {
         guard let selectedExport else { return }
         issues = publishQueue.enqueue(export: selectedExport, draft: draft)
+    }
+
+    private func refreshIssues() {
+        guard let selectedExport else {
+            issues = []
+            return
+        }
+        issues = PublishValidator.validate(
+            draft: draft, settings: selectedExport.settings,
+            media: selectedExport.outputInfo,
+            fileExists: FileManager.default.fileExists(atPath: selectedExport.outputURL.path))
     }
 
     @ViewBuilder

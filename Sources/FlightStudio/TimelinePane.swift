@@ -37,8 +37,8 @@ private struct TimelineEditor: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
 
-            if !clip.edit.cuts.isEmpty || !clip.edit.speedZones.isEmpty {
-                EditChips(clip: clip)
+            if !clip.edit.cuts.isEmpty || !clip.edit.speedZones.isEmpty || !clip.edit.markers.isEmpty {
+                EditChips(clip: clip, player: player)
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
             }
@@ -94,6 +94,14 @@ private struct TimelineEditor: View {
                         Button("Cancel") { pendingSpeedStart = nil }
                     } else {
                         Button("Start zone") { pendingSpeedStart = player.currentSourceTime }
+                    }
+                }
+                benchDivider
+                tool("Marker") {
+                    Button("Add marker") {
+                        let number = clip.edit.markers.count + 1
+                        clip.edit.markers.append(TimelineMarker(
+                            time: player.currentSourceTime, name: "Marker \(number)"))
                     }
                 }
                 benchDivider
@@ -231,6 +239,7 @@ private struct MusicControls: View {
 
 private struct EditChips: View {
     @ObservedObject var clip: Clip
+    @ObservedObject var player: PlayerController
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -247,8 +256,43 @@ private struct EditChips: View {
                         clip.edit.speedZones.removeAll { $0.id == zone.id }
                     }
                 }
+                ForEach(clip.edit.markers) { marker in
+                    markerChip(marker)
+                }
             }
         }
+    }
+
+    private func markerChip(_ marker: TimelineMarker) -> some View {
+        HStack(spacing: 5) {
+            Button {
+                player.seekSource(to: marker.time)
+            } label: {
+                Image(systemName: "bookmark.fill").font(.system(size: 9)).foregroundStyle(.purple)
+            }
+            .buttonStyle(.plain)
+            TextField("Marker", text: Binding(
+                get: { clip.edit.markers.first(where: { $0.id == marker.id })?.name ?? marker.name },
+                set: { name in
+                    guard let index = clip.edit.markers.firstIndex(where: { $0.id == marker.id }) else { return }
+                    clip.edit.markers[index].name = name
+                }
+            ))
+            .textFieldStyle(.plain)
+            .font(.caption2)
+            .frame(width: 72)
+            Text(timecode(marker.time)).font(.caption2.monospacedDigit())
+            Button {
+                clip.edit.markers.removeAll { $0.id == marker.id }
+            } label: {
+                Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .overlay(Capsule().strokeBorder(.separator))
     }
 
     private func chip(icon: String, color: Color, text: String,
@@ -318,6 +362,16 @@ private struct TimelineBar: View {
                         }
                         .frame(width: max(x(zone.end) - x(zone.start), 2))
                         .offset(x: x(zone.start))
+                    }
+                    ForEach(clip.edit.markers) { marker in
+                        VStack(spacing: 0) {
+                            Image(systemName: "bookmark.fill")
+                                .font(.system(size: 8))
+                            Rectangle().frame(width: 1.5)
+                        }
+                        .foregroundStyle(.purple)
+                        .frame(height: trackHeight, alignment: .top)
+                        .offset(x: x(marker.time) - 0.75)
                     }
 
                     if let p = pendingCutStart { pendingMark(at: x(p), .red) }

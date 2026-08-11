@@ -24,6 +24,13 @@ struct MusicTrack: Equatable, Codable {
     var muteOriginal: Bool = true
 }
 
+/// A named, non-destructive bookmark for a moment worth returning to.
+struct TimelineMarker: Identifiable, Equatable, Codable {
+    var id = UUID()
+    var time: Double
+    var name: String
+}
+
 /// Everything the user has done to one clip.
 struct EditPlan: Equatable, Codable {
     var inPoint: Double = 0
@@ -31,6 +38,7 @@ struct EditPlan: Equatable, Codable {
     var cuts: [CutRange] = []
     var speedZones: [SpeedZone] = []
     var music: MusicTrack? = nil
+    var markers: [TimelineMarker] = []
 
     var isDefault: Bool {
         inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty && music == nil
@@ -77,6 +85,13 @@ struct EditPlan: Equatable, Codable {
             cleaned.rampDuration = min(max(zone.rampDuration.isFinite ? zone.rampDuration : 0, 0), (end - start) / 2)
             return cleaned
         }
+        result.markers = markers.compactMap { marker in
+            guard marker.time.isFinite else { return nil }
+            var cleaned = marker
+            cleaned.time = min(max(marker.time, result.inPoint), rangeEnd)
+            cleaned.name = marker.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cleaned
+        }.sorted { $0.time < $1.time }
         if let music = music, !music.url.path.isEmpty {
             var cleaned = music
             cleaned.volume = min(max(music.volume.isFinite ? music.volume : 0.8, 0), 1)

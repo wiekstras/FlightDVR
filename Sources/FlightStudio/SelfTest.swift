@@ -325,11 +325,11 @@ enum SelfTest {
         // process-interrupted upload into an explicit retryable failure.
         var publishSettings = ExportSettings()
         publishSettings.preset = .social
-        var publishDraft = PublishDraft()
-        publishDraft.title = "Recovery test"
-        publishDraft.platforms = [.youtube, .tiktok]
+        var recoveryDraft = PublishDraft()
+        recoveryDraft.title = "Recovery test"
+        recoveryDraft.platforms = [.youtube, .tiktok]
         let publishSnapshot = PublishJobSnapshot(
-            id: UUID(), exportURL: stitchOut, settings: publishSettings, draft: publishDraft,
+            id: UUID(), exportURL: stitchOut, settings: publishSettings, draft: recoveryDraft,
             states: [.youtube: .uploaded, .tiktok: .uploading], progress: [.youtube: 1, .tiktok: 0.4])
         let journalURL = workDir.appendingPathComponent("publish-queue.json")
         try PublishQueueStore.save([publishSnapshot], to: journalURL)

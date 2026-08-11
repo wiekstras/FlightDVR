@@ -110,6 +110,17 @@ final class PlayerController: ObservableObject {
         if player.timeControlStatus == .playing { player.pause() } else { player.play() }
     }
 
+    /// Review controls operate in source time, so they stay intuitive whether
+    /// the live edit preview is currently enabled or not.
+    func jump(by seconds: Double) {
+        seekSource(to: currentSourceTime + seconds)
+    }
+
+    func stepFrame(by frames: Int) {
+        let fps = max(clip?.info?.fps ?? 30, 1)
+        jump(by: Double(frames) / fps)
+    }
+
     // MARK: Composition
 
     /// The edit plan realised as an AVMutableComposition over the remuxed
@@ -226,13 +237,46 @@ struct PlayerPane: View {
             .background(Color.black)
             HStack(spacing: 12) {
                 Button {
+                    player.jump(by: -5)
+                } label: {
+                    Image(systemName: "gobackward.5")
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut("j", modifiers: [])
+                .help("Back 5 seconds (J)")
+                Button {
+                    player.stepFrame(by: -1)
+                } label: {
+                    Image(systemName: "backward.frame.fill")
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.leftArrow, modifiers: [])
+                .help("Previous frame (←)")
+                Button {
                     player.togglePlay()
                 } label: {
                     Image(systemName: "playpause.fill")
                         .font(.system(size: 13))
                 }
                 .buttonStyle(.borderless)
-                .keyboardShortcut(.space, modifiers: [])
+                .keyboardShortcut("k", modifiers: [])
+                .help("Play or pause (K)")
+                Button {
+                    player.stepFrame(by: 1)
+                } label: {
+                    Image(systemName: "forward.frame.fill")
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut(.rightArrow, modifiers: [])
+                .help("Next frame (→)")
+                Button {
+                    player.jump(by: 5)
+                } label: {
+                    Image(systemName: "goforward.5")
+                }
+                .buttonStyle(.borderless)
+                .keyboardShortcut("l", modifiers: [])
+                .help("Forward 5 seconds (L)")
                 Text(timecode(player.currentTime))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
                 Text("/ \(timecode(player.duration))")

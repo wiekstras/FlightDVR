@@ -99,6 +99,11 @@ final class ExportJob: ObservableObject, Identifiable {
             case .waiting, .running, .done: false
             }
         }
+
+        var isFailure: Bool {
+            if case .failed = self { return true }
+            return false
+        }
     }
     let id = UUID()
     let clip: Clip
@@ -142,6 +147,10 @@ final class ExportQueue: ObservableObject {
 
     func clearFinished() {
         jobs.removeAll { $0.state == .done || $0.state == .cancelled }
+    }
+
+    func clearFailed() {
+        jobs.removeAll { $0.state.isFailure }
     }
 
     func cancel(_ job: ExportJob) { job.cancelFlag = true }

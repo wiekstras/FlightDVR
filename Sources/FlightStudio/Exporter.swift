@@ -213,6 +213,58 @@ enum ExportOutput {
     }
 }
 
+enum ExportDiskSpace {
+    /// Estimate the private staging file before encoding. The margin covers
+    /// container overhead and bitrate variability without blocking reasonable jobs.
+    static func requiredBytes(clips: [ExportClipSnapshot], settings: ExportSettings) -> Int64 {
+        let sourceBytes = clips.reduce(Int64(0)) { $0 + max($1.info?.fileSize ?? 0, 0) }
+        let encodedBytes: Double
+        switch settings.preset {
+        case .remux:
+            encodedBytes = Double(sourceBytes)
+        case .social where clips.count == 1:
+            encodedBytes = settings.socialTargetMB * 1_000_000
+        case .edit, .master, .social:
+            encodedBytes = clips.reduce(0) { total, clip in
+                guard let info = clip.info else { return total }
+                let duration = max(clip.edit.outputDuration(duration: info.duration), 0)
+                let pixelRateScale = Double(info.width) * Double(info.height) * max(info.fps, 1)
+                    / Double(1920 * 1080 * 30)
+                let mbps: Double
+                if settings.preset == .edit {
+                    switch settings.proResProfile {
+                    case .lt: mbps = 102
+                    case .standard: mbps = 147
+                    case .hq: mbps = 220
+                    }
+                } else {
+                    switch settings.masterQuality {
+                    case .archive: mbps = 50
+                    case .high: mbps = 35
+                    case .good: mbps = 25
+                    case .compact: mbps = 15
+                    }
+                }
+                return total + duration * mbps * max(pixelRateScale, 0.25) * 1_000_000 / 8
+            }
+        }
+        return Int64(max(encodedBytes * 1.15, 0).rounded(.up)) + 64_000_000
+    }
+
+    static func availableBytes(at destination: URL) -> Int64? {
+        let folder = destination.deletingLastPathComponent()
+        return try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage
+    }
+
+    static func validationError(required: Int64, available: Int64?) -> String? {
+        guard let available, available < required else { return nil }
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return "Not enough free space to export. DVR Studio needs about \(formatter.string(fromByteCount: required)), but this volume has \(formatter.string(fromByteCount: available)) available."
+    }
+}
+
 // MARK: - Jobs
 
 enum ExportState: Equatable, Codable {
@@ -565,6 +617,15 @@ final class ExportQueue: ObservableObject {
     }
 
     private func runJob(_ job: ExportJob) async throws {
+        let snapshots = job.clips.map {
+            ExportClipSnapshot(url: $0.url, info: $0.info, edit: $0.edit)
+        }
+        let required = ExportDiskSpace.requiredBytes(clips: snapshots, settings: job.settings)
+        if let error = ExportDiskSpace.validationError(
+            required: required,
+            available: ExportDiskSpace.availableBytes(at: job.outputURL)) {
+            throw FFmpeg.ProcessError(command: "export preflight", stderr: error)
+        }
         // Overwrite protection applies equally to single clips and stitches.
         if FileManager.default.fileExists(atPath: job.outputURL.path) {
             let replaced = job.outputURL

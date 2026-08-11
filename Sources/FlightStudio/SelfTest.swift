@@ -338,6 +338,28 @@ enum SelfTest {
         }
         print("export queue recovery and atomic output promotion ok")
 
+        var diskSettings = ExportSettings()
+        diskSettings.preset = .edit
+        let diskEstimate = ExportDiskSpace.requiredBytes(
+            clips: [ExportClipSnapshot(url: src, info: info, edit: plan)], settings: diskSettings)
+        guard diskEstimate > 64_000_000,
+              ExportDiskSpace.validationError(required: diskEstimate,
+                                              available: diskEstimate - 1)?.contains("Not enough free space") == true,
+              ExportDiskSpace.validationError(required: diskEstimate,
+                                              available: diskEstimate) == nil else {
+            throw Failure("export disk-space preflight did not enforce its staging estimate")
+        }
+        var socialDiskSettings = ExportSettings()
+        socialDiskSettings.preset = .social
+        socialDiskSettings.socialTargetMB = 25
+        let socialDiskEstimate = ExportDiskSpace.requiredBytes(
+            clips: [ExportClipSnapshot(url: src, info: info, edit: plan)],
+            settings: socialDiskSettings)
+        guard socialDiskEstimate == 92_750_000 else {
+            throw Failure("social disk estimate did not track the target file size")
+        }
+        print("export disk-space preflight ok")
+
         // 3h. Source↔output time mapping must round-trip through cuts and ramps.
         for t in stride(from: plan.inPoint, to: 9.0, by: 0.25) {
             // Cut interiors and their boundaries legitimately collapse to one output time.

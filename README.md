@@ -66,6 +66,8 @@ it, and add eased speed ramps.
   their edit instructions and media metadata. Encoders write to private staging
   files, verify the result with ffprobe, and atomically promote it only after
   completion, protecting new and replaced exports from partial-file corruption.
+  Preset-aware disk preflight rejects jobs before encoding when the destination
+  volume cannot hold the private staging file.
 - **Stitch** — tick two or more compatible clips and create one continuous,
   shareable sequence in the current list order.
 

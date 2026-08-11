@@ -26,6 +26,7 @@ private struct TimelineEditor: View {
     @Binding var pendingSpeedStart: Double?
     @Binding var newZoneSpeed: Double
     @State private var projectError: String?
+    @State private var highlightLength: Double = 30
 
     var duration: Double { clip.info?.duration ?? player.duration }
 
@@ -46,11 +47,42 @@ private struct TimelineEditor: View {
             Divider()
                 .padding(.top, 10)
 
+            HStack(spacing: 8) {
+                Label("Quick Highlight", systemImage: "sparkles.rectangle.stack")
+                    .font(.callout.weight(.medium))
+                Picker("Length", selection: $highlightLength) {
+                    Text("15 sec").tag(15.0)
+                    Text("30 sec").tag(30.0)
+                    Text("60 sec").tag(60.0)
+                }
+                .labelsHidden()
+                .frame(width: 82)
+                Button("Around Playhead") {
+                    clip.edit.setHighlight(around: player.currentSourceTime,
+                                           length: highlightLength,
+                                           duration: duration)
+                }
+                .keyboardShortcut("h", modifiers: [])
+                .disabled(duration <= 0)
+                .help("Create a highlight centered on the current moment (H)")
+                Text("Sets In/Out without changing the source")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .controlSize(.small)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
             // The bench: one flat row of tools, grouped by tracked labels.
             HStack(alignment: .top, spacing: 0) {
                 tool("Trim") {
                     Button("In") { clip.edit.inPoint = player.currentSourceTime }
+                        .keyboardShortcut("i", modifiers: [])
+                        .help("Set In point (I)")
                     Button("Out") { clip.edit.outPoint = player.currentSourceTime }
+                        .keyboardShortcut("o", modifiers: [])
+                        .help("Set Out point (O)")
                     Button("Reset") { clip.edit = EditPlan() }
                 }
                 benchDivider
@@ -103,6 +135,8 @@ private struct TimelineEditor: View {
                         clip.edit.markers.append(TimelineMarker(
                             time: player.currentSourceTime, name: "Marker \(number)"))
                     }
+                    .keyboardShortcut("m", modifiers: [])
+                    .help("Add marker (M)")
                 }
                 benchDivider
                 tool("Music") {

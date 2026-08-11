@@ -146,6 +146,23 @@ enum SelfTest {
         }
         print("edit validation ok")
 
+        // Quick Highlight preserves its full window where possible and clamps
+        // cleanly at both source edges and on short recordings.
+        var highlight = EditPlan()
+        highlight.setHighlight(around: 2, length: 6, duration: 10)
+        guard highlight.inPoint == 0, highlight.outPoint == 6 else {
+            throw Failure("early quick highlight did not slide to the source start")
+        }
+        highlight.setHighlight(around: 9, length: 6, duration: 10)
+        guard highlight.inPoint == 4, highlight.outPoint == 10 else {
+            throw Failure("late quick highlight did not slide to the source end")
+        }
+        highlight.setHighlight(around: 2, length: 30, duration: 10)
+        guard highlight.inPoint == 0, highlight.outPoint == 10 else {
+            throw Failure("quick highlight mishandled a short recording")
+        }
+        print("quick highlight boundaries ok")
+
         // 3d. Project sidecars preserve a full edit, including music settings.
         let projectClip = Clip(url: src)
         projectClip.edit = plan

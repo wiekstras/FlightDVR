@@ -44,6 +44,26 @@ struct EditPlan: Equatable, Codable {
         inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty && music == nil
     }
 
+    /// Trim around a moment without exceeding the source. Near either edge the
+    /// window slides to preserve the requested length where possible.
+    mutating func setHighlight(around time: Double, length: Double, duration: Double) {
+        guard duration.isFinite, duration > 0, length.isFinite, length > 0 else { return }
+        let window = min(length, duration)
+        let center = min(max(time.isFinite ? time : 0, 0), duration)
+        var start = center - window / 2
+        var end = center + window / 2
+        if start < 0 {
+            end -= start
+            start = 0
+        }
+        if end > duration {
+            start -= end - duration
+            end = duration
+        }
+        inPoint = max(0, start)
+        outPoint = min(duration, end)
+    }
+
     /// Returns a safe, deterministic version of an edit before it is rendered.
     /// Imported or manually edited projects can otherwise contain negative times,
     /// inverted ranges, or overlapping cuts that make ffmpeg reject the graph.

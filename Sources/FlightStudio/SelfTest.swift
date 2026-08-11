@@ -365,9 +365,12 @@ enum SelfTest {
         settings.keepAudio = true
 
         let out = workDir.appendingPathComponent("edited.mp4")
+        let commandsJobID = UUID()
+        defer { try? FileManager.default.removeItem(
+            at: ExportCommandBuilder.titleAssetURL(jobID: commandsJobID)) }
         let commands = ExportCommandBuilder.build(
             plan: plan, settings: settings, info: info,
-            source: src, output: out, jobID: UUID())
+            source: src, output: out, jobID: commandsJobID)
         guard commands.count == 1 else { throw Failure("master preset should be one pass") }
         guard commands[0].contains(where: {
             $0.contains("volume=0.550,afade=t=in:d=0.250")
@@ -376,10 +379,11 @@ enum SelfTest {
             throw Failure("source audio volume and fades were missing from the export graph")
         }
         guard commands[0].contains(where: {
-            $0.contains("drawtext=text='Lap\\: 100% \\'fast\\''")
+            $0.contains("overlay=x=(W-w)/2:y=H*0.08")
                 && $0.contains("enable='between(t,")
-        }) else {
-            throw Failure("timed title text, escaping or visibility was missing from the export graph")
+        }), FileManager.default.fileExists(atPath: ExportCommandBuilder.titleAssetURL(
+            jobID: commandsJobID).path) else {
+            throw Failure("timed title image, placement or visibility was missing from the export graph")
         }
         print("running export…")
         try FFmpeg.run(commands[0])

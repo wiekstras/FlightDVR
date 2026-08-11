@@ -586,6 +586,7 @@ final class ExportQueue: ObservableObject {
         let commands = ExportCommandBuilder.build(
             plan: plan, settings: settings, info: info,
             source: job.clip.url, output: job.stagingURL, jobID: job.id)
+        defer { try? FileManager.default.removeItem(at: ExportCommandBuilder.titleAssetURL(jobID: job.id)) }
         let passes = Double(commands.count)
         for (index, args) in commands.enumerated() {
             let passBase = Double(index) / passes
@@ -643,6 +644,10 @@ final class ExportQueue: ObservableObject {
 /// Turns a clip + edit plan + settings into complete ffmpeg invocations.
 /// Pure and headless, so the GUI queue and --selftest share the same path.
 enum ExportCommandBuilder {
+    static func titleAssetURL(jobID: UUID) -> URL {
+        ClipStore.cacheRoot.appendingPathComponent("title-\(jobID.uuidString).png")
+    }
+
     /// One or two (two-pass social) complete ffmpeg invocations for a job.
     static func build(plan: EditPlan, settings: ExportSettings, info: ClipInfo,
                       source src: URL, output out: URL, jobID: UUID) -> [[String]] {
@@ -663,7 +668,20 @@ enum ExportCommandBuilder {
         let fixRange = settings.colorMode == .fixRange
         var effectivePlan = plan
         if !settings.keepAudio { effectivePlan.music = nil }
+        let safePlan = effectivePlan.sanitized(duration: info.duration)
         let wantAudio = settings.keepAudio && (info.hasAudio || plan.music != nil)
+        var inputs: [String] = ["-i", src.path]
+        if let music = safePlan.music {
+            inputs += ["-stream_loop", "-1", "-i", music.url.path]
+        }
+        var titleInputIndex: Int?
+        if let title = safePlan.title {
+            let url = titleAssetURL(jobID: jobID)
+            if TitleImageRenderer.write(title.text, to: url) {
+                titleInputIndex = safePlan.music == nil ? 1 : 2
+                inputs += ["-loop", "1", "-i", url.path]
+            }
+        }
         let graph = FilterGraphBuilder.build(plan: effectivePlan, duration: info.duration,
                                              sourceHasAudio: settings.keepAudio && info.hasAudio,
                                              fixColorRange: fixRange,
@@ -671,12 +689,8 @@ enum ExportCommandBuilder {
                                                 ? settings.socialProfile.videoFilter(
                                                     framing: settings.socialFraming,
                                                     positionX: settings.cropPositionX,
-                                                    positionY: settings.cropPositionY) : nil)
-
-        var inputs: [String] = ["-i", src.path]
-        if graph.needsMusicInput, let music = effectivePlan.music {
-            inputs += ["-stream_loop", "-1", "-i", music.url.path]
-        }
+                                                    positionY: settings.cropPositionY) : nil,
+                                             titleInputIndex: titleInputIndex)
 
         var common: [String] = ["-y"] + inputs + ["-filter_complex", graph.filterComplex,
                                                   "-map", "[\(graph.videoLabel)]"]
@@ -725,6 +739,43 @@ enum ExportCommandBuilder {
 
         case .remux:
             fatalError("handled above")
+        }
+    }
+}
+
+private enum TitleImageRenderer {
+    static func write(_ text: String, to url: URL) -> Bool {
+        let font = NSFont.systemFont(ofSize: 72, weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: NSColor.white
+        ]
+        let string = NSAttributedString(string: text, attributes: attributes)
+        let measured = string.boundingRect(with: NSSize(width: 1_400, height: 300),
+                                           options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let size = NSSize(width: ceil(measured.width) + 56, height: ceil(measured.height) + 36)
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                             pixelsWide: max(Int(size.width), 1),
+                                             pixelsHigh: max(Int(size.height), 1),
+                                             bitsPerSample: 8, samplesPerPixel: 4,
+                                             hasAlpha: true, isPlanar: false,
+                                             colorSpaceName: .deviceRGB,
+                                             bitmapFormat: [], bytesPerRow: 0, bitsPerPixel: 0) else { return false }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor.black.withAlphaComponent(0.58).setFill()
+        NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 10, yRadius: 10).fill()
+        string.draw(in: NSRect(x: 28, y: 18, width: size.width - 56, height: size.height - 36))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let data = bitmap.representation(using: .png, properties: [:]) else { return false }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                     withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
         }
     }
 }

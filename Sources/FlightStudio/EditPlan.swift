@@ -349,7 +349,8 @@ enum FilterGraphBuilder {
     /// Build the -filter_complex for one clip's edit plan.
     /// Input 0 is the clip; input 1 (optional) is the music file.
     static func build(plan: EditPlan, duration: Double, sourceHasAudio: Bool,
-                      fixColorRange: Bool, outputVideoFilter: String? = nil) -> Graph {
+                      fixColorRange: Bool, outputVideoFilter: String? = nil,
+                      titleInputIndex: Int? = nil) -> Graph {
         let plan = plan.sanitized(duration: duration)
         let segs = plan.resolvedSegments(duration: duration)
         precondition(!segs.isEmpty, "empty edit")
@@ -391,19 +392,18 @@ enum FilterGraphBuilder {
             lines.append("[\(vOut)]\(outputVideoFilter)[vdelivery]")
             vOut = "vdelivery"
         }
-        if let title = plan.title {
+        if let title = plan.title, let titleInputIndex {
             let start = plan.outputTime(forSource: title.start, duration: duration)
             let end = plan.outputTime(forSource: title.end, duration: duration)
             let y: String
             switch title.position {
-            case .top: y = "h*0.08"
-            case .center: y = "(h-text_h)/2"
-            case .bottom: y = "h-text_h-h*0.08"
+            case .top: y = "H*0.08"
+            case .center: y = "(H-h)/2"
+            case .bottom: y = "H-h-H*0.08"
             }
-            let escaped = TitleOverlay.escapedForDrawText(title.text)
             lines.append(String(
-                format: "[%@]drawtext=text='%@':expansion=none:font='Helvetica':fontcolor=white:fontsize=h*0.06:box=1:boxcolor=black@0.58:boxborderw=12:x=(w-text_w)/2:y=%@:enable='between(t,%.4f,%.4f)'[vtitle]",
-                vOut, escaped, y, start, end))
+                format: "[%@][%d:v]overlay=x=(W-w)/2:y=%@:enable='between(t,%.4f,%.4f)':eof_action=repeat[vtitle]",
+                vOut, titleInputIndex, y, start, end))
             vOut = "vtitle"
         }
 

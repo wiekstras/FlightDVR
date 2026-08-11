@@ -178,6 +178,20 @@ struct QueueRow: View {
                     .buttonStyle(.plain)
                 case .waiting:
                     Button {
+                        queue.moveWaiting(job, by: -1)
+                    } label: {
+                        Image(systemName: "arrow.up.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Move earlier")
+                    Button {
+                        queue.moveWaiting(job, by: 1)
+                    } label: {
+                        Image(systemName: "arrow.down.circle")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Move later")
+                    Button {
                         queue.remove(job)
                     } label: {
                         Image(systemName: "xmark.circle")

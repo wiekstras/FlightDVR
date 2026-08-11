@@ -141,6 +141,25 @@ enum SelfTest {
         }
         print("library metadata and edit recovery ok")
 
+        // The large-library index loads its payload once and serves keyed
+        // records without reparsing the complete dictionary for every clip.
+        let suiteName = "FlightStudio.SelfTest.\(UUID().uuidString)"
+        guard let isolatedDefaults = UserDefaults(suiteName: suiteName) else {
+            throw Failure("could not create isolated metadata defaults")
+        }
+        defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
+        let metadataKey = "metadata-index-test"
+        let metadataIndex = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
+        let indexedURL = workDir.appendingPathComponent("indexed.ts")
+        let indexedRecord = ClipLibraryRecord(favorite: true, tags: ["freestyle"], edit: plan)
+        metadataIndex.save(indexedRecord, for: indexedURL)
+        let reloadedIndex = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
+        guard metadataIndex.recordCount == 1, reloadedIndex.recordCount == 1,
+              reloadedIndex.record(for: indexedURL) == indexedRecord else {
+            throw Failure("library metadata index did not persist or reload records")
+        }
+        print("library metadata index ok")
+
         // 3c. Invalid timeline data is normalised before it can reach ffmpeg.
         var messy = EditPlan(inPoint: -2, outPoint: 99,
                              cuts: [CutRange(start: 2, end: 4), CutRange(start: 3, end: 6),

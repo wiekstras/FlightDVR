@@ -2,31 +2,52 @@ import SwiftUI
 import Combine
 import CryptoKit
 
-private struct ClipLibraryRecord: Codable {
+struct ClipLibraryRecord: Codable, Equatable {
     var favorite = false
     var tags: [String] = []
     var edit: EditPlan? = nil
 }
 
-private enum ClipLibraryMetadata {
-    private static let key = "clipLibraryMetadata-v1"
+/// A single decoded metadata index for the process. Previously every Clip init
+/// decoded the complete UserDefaults payload, turning large scans into repeated
+/// parsing work. The lock also keeps background queue recovery and UI edits safe.
+final class ClipLibraryMetadataIndex: @unchecked Sendable {
+    static let shared = ClipLibraryMetadataIndex()
 
-    static func record(for url: URL) -> ClipLibraryRecord {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let records = try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)
-        else { return ClipLibraryRecord() }
+    private let defaults: UserDefaults
+    private let key: String
+    private let lock = NSLock()
+    private var records: [String: ClipLibraryRecord]
+
+    init(defaults: UserDefaults = .standard, key: String = "clipLibraryMetadata-v1") {
+        self.defaults = defaults
+        self.key = key
+        if let data = defaults.data(forKey: key) {
+            records = (try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)) ?? [:]
+        } else {
+            records = [:]
+        }
+    }
+
+    func record(for url: URL) -> ClipLibraryRecord {
+        lock.lock()
+        defer { lock.unlock() }
         return records[url.standardizedFileURL.path] ?? ClipLibraryRecord()
     }
 
-    static func save(_ record: ClipLibraryRecord, for url: URL) {
-        var records: [String: ClipLibraryRecord] = [:]
-        if let data = UserDefaults.standard.data(forKey: key) {
-            records = (try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)) ?? [:]
-        }
+    func save(_ record: ClipLibraryRecord, for url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
         records[url.standardizedFileURL.path] = record
         if let data = try? JSONEncoder().encode(records) {
-            UserDefaults.standard.set(data, forKey: key)
+            defaults.set(data, forKey: key)
         }
+    }
+
+    var recordCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return records.count
     }
 }
 
@@ -71,7 +92,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
         self.fileDate = (attrs?[.creationDate] ?? attrs?[.modificationDate]) as? Date ?? .distantPast
         self.parsedDate = Clip.parseDate(from: url.lastPathComponent)
-        let record = ClipLibraryMetadata.record(for: url)
+        let record = ClipLibraryMetadataIndex.shared.record(for: url)
         self.favorite = record.favorite
         self.tags = record.tags
         self.edit = record.edit ?? EditPlan()
@@ -118,7 +139,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     private func persistLibraryRecord() {
         editSaveWorkItem?.cancel()
         let savedEdit = edit.isDefault && edit.markers.isEmpty ? nil : edit
-        ClipLibraryMetadata.save(
+        ClipLibraryMetadataIndex.shared.save(
             ClipLibraryRecord(favorite: favorite, tags: tags, edit: savedEdit),
             for: url
         )

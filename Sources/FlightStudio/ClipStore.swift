@@ -9,8 +9,18 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     @Published var thumbnail: NSImage?
     @Published var ticked = false
     @Published var previewURL: URL?      // remuxed .mp4 the native player can open
-    @Published var edit = EditPlan()
+    @Published var edit = EditPlan() {
+        didSet {
+            guard !restoringEdit, edit != oldValue else { return }
+            undoEdits.append(oldValue)
+            if undoEdits.count > 100 { undoEdits.removeFirst(undoEdits.count - 100) }
+            redoEdits.removeAll()
+        }
+    }
     @Published var relativeName: String = ""   // path relative to the scanned folder
+    private var undoEdits: [EditPlan] = []
+    private var redoEdits: [EditPlan] = []
+    private var restoringEdit = false
 
     let fileDate: Date           // the filesystem's story
     let parsedDate: Date?        // a date found in the filename, which we trust more
@@ -25,6 +35,29 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     }
 
     var name: String { url.lastPathComponent }
+    var canUndoEdit: Bool { !undoEdits.isEmpty }
+    var canRedoEdit: Bool { !redoEdits.isEmpty }
+
+    func undoEdit() {
+        guard let previous = undoEdits.popLast() else { return }
+        restoringEdit = true
+        redoEdits.append(edit)
+        edit = previous
+        restoringEdit = false
+    }
+
+    func redoEdit() {
+        guard let next = redoEdits.popLast() else { return }
+        restoringEdit = true
+        undoEdits.append(edit)
+        edit = next
+        restoringEdit = false
+    }
+
+    func clearEditHistory() {
+        undoEdits.removeAll()
+        redoEdits.removeAll()
+    }
     /// Best guess at when this was flown: a date embedded in the filename wins,
     /// otherwise the file's own date.
     var flightDate: Date { parsedDate ?? fileDate }

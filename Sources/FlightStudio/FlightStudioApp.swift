@@ -21,6 +21,14 @@ struct FlightStudioApp: App {
         .windowStyle(.automatic)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo Edit") { store.selectedClip?.undoEdit() }
+                    .keyboardShortcut("z", modifiers: .command)
+                    .disabled(!(store.selectedClip?.canUndoEdit ?? false))
+                Button("Redo Edit") { store.selectedClip?.redoEdit() }
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+                    .disabled(!(store.selectedClip?.canRedoEdit ?? false))
+            }
             CommandMenu("Clips") {
                 Button("Scan") { store.rescan() }
                     .keyboardShortcut("r", modifiers: .command)

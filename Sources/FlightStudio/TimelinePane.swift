@@ -105,6 +105,23 @@ private struct TimelineEditor: View {
                     Button("Save…") { saveProject() }
                     Button("Open…") { openProject() }
                 }
+                benchDivider
+                tool("History") {
+                    Button {
+                        clip.undoEdit()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                    }
+                    .disabled(!clip.canUndoEdit)
+                    .help("Undo edit (⌘Z)")
+                    Button {
+                        clip.redoEdit()
+                    } label: {
+                        Image(systemName: "arrow.uturn.forward")
+                    }
+                    .disabled(!clip.canRedoEdit)
+                    .help("Redo edit (⇧⌘Z)")
+                }
                 Spacer()
             }
             .padding(.horizontal, 16)

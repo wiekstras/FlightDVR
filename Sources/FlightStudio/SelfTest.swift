@@ -142,7 +142,22 @@ enum SelfTest {
         }
         print("edit project ok")
 
-        // 3e. Queued and on-disk name collisions receive predictable suffixes.
+        // 3e. Every non-destructive edit can be undone and redone.
+        let historyClip = Clip(url: src)
+        historyClip.clearEditHistory()
+        historyClip.edit.inPoint = 2
+        guard historyClip.canUndoEdit else { throw Failure("edit history did not record a trim") }
+        historyClip.undoEdit()
+        guard historyClip.edit.inPoint == 0, historyClip.canRedoEdit else {
+            throw Failure("undo did not restore the previous edit")
+        }
+        historyClip.redoEdit()
+        guard historyClip.edit.inPoint == 2 else {
+            throw Failure("redo did not restore the edited trim")
+        }
+        print("edit history ok")
+
+        // 3f. Queued and on-disk name collisions receive predictable suffixes.
         let exportFolder = workDir.appendingPathComponent("exports", isDirectory: true)
         let first = OutputNamer.uniqueURL(in: exportFolder, baseName: "flight", fileExtension: "mp4",
                                           fileExists: { _ in false })
@@ -156,7 +171,7 @@ enum SelfTest {
         }
         print("output naming ok")
 
-        // 3f. Source↔output time mapping must round-trip through cuts and ramps.
+        // 3g. Source↔output time mapping must round-trip through cuts and ramps.
         for t in stride(from: plan.inPoint, to: 9.0, by: 0.25) {
             // Cut interiors and their boundaries legitimately collapse to one output time.
             let inCut = plan.cuts.contains { t >= $0.start && t <= $0.end }

@@ -76,7 +76,8 @@ it, and add eased speed ramps.
   Choose a JPEG/PNG YouTube thumbnail or generate a 1280×720 frame from the
   completed export without leaving DVR Studio.
 - **Crash-safe exports** — queued export jobs survive relaunches, including
-  their edit instructions and media metadata. Encoders write to private staging
+  their frozen edit instructions and media metadata, so later timeline changes
+  cannot alter an already queued deliverable. Encoders write to private staging
   files, verify the result with ffprobe, and atomically promote it only after
   completion, protecting new and replaced exports from partial-file corruption.
   Preset-aware disk preflight rejects jobs before encoding when the destination

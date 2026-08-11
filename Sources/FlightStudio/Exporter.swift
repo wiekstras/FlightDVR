@@ -511,7 +511,8 @@ final class ExportQueue: ObservableObject {
             let out = OutputNamer.uniqueURL(in: folder, baseName: base,
                                              fileExtension: settings.preset.fileExtension,
                                              reserved: Set(jobs.map(\.outputURL)))
-            jobs.append(ExportJob(clips: [clip], settings: settings, outputURL: out))
+            let variant = Clip.exportVariant(from: clip, edit: clip.edit)
+            jobs.append(ExportJob(clips: [variant], settings: settings, outputURL: out))
         }
         persist()
     }
@@ -576,7 +577,8 @@ final class ExportQueue: ObservableObject {
         let out = OutputNamer.uniqueURL(in: folder, baseName: "Flight sequence",
                                         fileExtension: stitchSettings.preset.fileExtension,
                                         reserved: Set(jobs.map(\.outputURL)))
-        jobs.append(ExportJob(clips: clips, settings: stitchSettings, outputURL: out))
+        let variants = clips.map { Clip.exportVariant(from: $0, edit: $0.edit) }
+        jobs.append(ExportJob(clips: variants, settings: stitchSettings, outputURL: out))
         persist()
     }
 

@@ -208,8 +208,10 @@ enum SelfTest {
         let detachedVariant = Clip.exportVariant(
             from: favoriteClip, edit: EditPlan(inPoint: 4, outPoint: 5))
         detachedVariant.edit.inPoint = 4.5
-        guard Clip(url: src).edit.inPoint == 1.5 else {
-            throw Failure("detached export variant overwrote the active library edit")
+        favoriteClip.edit.inPoint = 8
+        guard Clip(url: src).edit.inPoint == 1.5,
+              detachedVariant.edit.inPoint == 4.5 else {
+            throw Failure("detached export variant did not isolate queued and active edits")
         }
         print("library metadata, highlight shelf and edit recovery ok")
 

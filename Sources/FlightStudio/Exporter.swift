@@ -64,6 +64,11 @@ struct ExportSettings {
     var keepAudio = true
     var useHardware = false
     var outputFolder: URL?
+
+    var resolvedOutputFolder: URL {
+        outputFolder ?? FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Flight Studio", isDirectory: true)
+    }
 }
 
 /// Produces a non-destructive export name.  A card can contain clips with the
@@ -127,9 +132,7 @@ final class ExportQueue: ObservableObject {
     @Published var currentMessage = ""
 
     func enqueue(clips: [Clip], settings: ExportSettings) {
-        let folder = settings.outputFolder
-            ?? FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Flight Studio", isDirectory: true)
+        let folder = settings.resolvedOutputFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for clip in clips {
             let base = clip.url.deletingPathExtension().lastPathComponent

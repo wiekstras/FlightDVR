@@ -81,20 +81,25 @@ final class ClipStore: ObservableObject {
     @Published var ffmpegMissing = !FFmpeg.isAvailable
     @Published var sortOrder: SortOrder = .date
     @Published var reverseSort = false
+    @Published var searchQuery = ""
     @Published var previewCacheBytes: Int64 = 0
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        let searchable = query.isEmpty ? clips : clips.filter {
+            $0.relativeName.localizedCaseInsensitiveContains(query)
+        }
         let ordered: [Clip]
         switch sortOrder {
         case .date:
-            ordered = clips.sorted { ($0.flightDate, $0.name) > ($1.flightDate, $1.name) }
+            ordered = searchable.sorted { ($0.flightDate, $0.name) > ($1.flightDate, $1.name) }
         case .name:
-            ordered = clips.sorted { $0.relativeName.localizedStandardCompare($1.relativeName) == .orderedAscending }
+            ordered = searchable.sorted { $0.relativeName.localizedStandardCompare($1.relativeName) == .orderedAscending }
         case .duration:
-            ordered = clips.sorted { ($0.info?.duration ?? 0) > ($1.info?.duration ?? 0) }
+            ordered = searchable.sorted { ($0.info?.duration ?? 0) > ($1.info?.duration ?? 0) }
         case .size:
-            ordered = clips.sorted { ($0.info?.fileSize ?? 0) > ($1.info?.fileSize ?? 0) }
+            ordered = searchable.sorted { ($0.info?.fileSize ?? 0) > ($1.info?.fileSize ?? 0) }
         }
         return reverseSort ? Array(ordered.reversed()) : ordered
     }

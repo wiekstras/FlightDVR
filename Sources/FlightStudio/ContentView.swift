@@ -150,6 +150,10 @@ struct ClipListView: View {
                 .help("Reverse sort order")
             }
             .padding(8)
+            TextField("Filter clips", text: $store.searchQuery)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
             Divider()
             List(selection: Binding(
                 get: { store.selectedClip },

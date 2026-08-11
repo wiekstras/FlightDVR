@@ -402,7 +402,7 @@ enum FilterGraphBuilder {
             case .bottom: y = "H-h-H*0.08"
             }
             lines.append(String(
-                format: "[%@][%d:v]overlay=x=(W-w)/2:y=%@:enable='between(t,%.4f,%.4f)':eof_action=repeat[vtitle]",
+                format: "[%@][%d:v]overlay=x=(W-w)/2:y=%@:enable='between(t,%.4f,%.4f)':eof_action=repeat:shortest=1[vtitle]",
                 vOut, titleInputIndex, y, start, end))
             vOut = "vtitle"
         }

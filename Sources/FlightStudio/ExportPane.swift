@@ -49,9 +49,7 @@ struct ExportPane: View {
                                 Text(framing.rawValue).tag(framing)
                             }
                         }
-                        Text(settings.socialFraming == .fit
-                             ? "Keeps the full recording and adds padding where needed."
-                             : "Fills the canvas edge to edge by cropping the sides.")
+                        Text(framingDescription)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -185,6 +183,14 @@ struct ExportPane: View {
         }
     }
 
+    private var framingDescription: String {
+        switch settings.socialFraming {
+        case .fit: "Keeps the full recording and adds black padding where needed."
+        case .blurredBackground: "Keeps the full recording over a softly blurred edge-to-edge background."
+        case .fill: "Fills the canvas edge to edge by cropping the sides."
+        }
+    }
+
     @ViewBuilder
     private func section(_ label: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -224,6 +230,14 @@ private struct SocialFramingPreview: View {
                 let renderedHeight = renderedWidth / imageAspect
                 let overflowX = max(renderedWidth - canvas.width, 0)
                 let overflowY = max(renderedHeight - canvas.height, 0)
+                if framing == .blurredBackground {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: canvas.width, height: canvas.height)
+                        .blur(radius: 12)
+                        .scaleEffect(1.08)
+                }
                 Image(nsImage: image)
                     .resizable()
                     .frame(width: renderedWidth, height: renderedHeight)

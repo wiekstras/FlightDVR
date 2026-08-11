@@ -94,12 +94,20 @@ enum SocialProfile: String, CaseIterable, Identifiable, Codable {
             return String(format: "scale=%@:force_original_aspect_ratio=increase,crop=%@:(iw-ow)*%.4f:(ih-oh)*%.4f",
                           size, size, x, y)
         }
+        if framing == .blurredBackground {
+            return "split=2[background][foreground];" +
+                "[background]scale=\(size):force_original_aspect_ratio=increase," +
+                "crop=\(size),boxblur=20:2[blurred];" +
+                "[foreground]scale=\(size):force_original_aspect_ratio=decrease[front];" +
+                "[blurred][front]overlay=(W-w)/2:(H-h)/2"
+        }
         return "scale=\(size):force_original_aspect_ratio=decrease,pad=\(size):(ow-iw)/2:(oh-ih)/2:black"
     }
 }
 
 enum SocialFraming: String, CaseIterable, Identifiable, Codable {
     case fit = "Fit entire frame"
+    case blurredBackground = "Fit with blurred background"
     case fill = "Fill canvas"
     var id: String { rawValue }
 }

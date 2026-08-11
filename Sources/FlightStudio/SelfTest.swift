@@ -525,6 +525,17 @@ enum SelfTest {
         }) else {
             throw Failure("positioned fill framing did not crop to the requested canvas")
         }
+        socialSettings.socialFraming = .blurredBackground
+        let blurCommands = ExportCommandBuilder.build(
+            plan: plan, settings: socialSettings, info: info,
+            source: src, output: socialOut, jobID: UUID())
+        guard blurCommands[0].contains(where: {
+            $0.contains("split=2[background][foreground]")
+                && $0.contains("crop=1080:1920,boxblur=20:2")
+                && $0.contains("[blurred][front]overlay=(W-w)/2:(H-h)/2")
+        }) else {
+            throw Failure("blurred social framing did not build a full-canvas background")
+        }
         let encodedSettings = try JSONEncoder().encode(socialSettings)
         guard var legacySettingsJSON = try JSONSerialization.jsonObject(with: encodedSettings) as? [String: Any] else {
             throw Failure("could not construct legacy export settings fixture")

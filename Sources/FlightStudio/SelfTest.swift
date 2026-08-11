@@ -333,6 +333,15 @@ enum SelfTest {
         guard socialCommands[0].contains(where: { $0.contains("pad=1080:1920") }) else {
             throw Failure("social export did not apply the vertical delivery canvas")
         }
+        socialSettings.socialFraming = .fill
+        let fillCommands = ExportCommandBuilder.build(
+            plan: plan, settings: socialSettings, info: info,
+            source: src, output: socialOut, jobID: UUID())
+        guard fillCommands[0].contains(where: {
+            $0.contains("force_original_aspect_ratio=increase,crop=1080:1920")
+        }) else {
+            throw Failure("fill framing did not crop to the vertical delivery canvas")
+        }
         var publishDraft = PublishDraft()
         publishDraft.title = "Clean gap"
         publishDraft.platforms = [.tiktok, .youtube]

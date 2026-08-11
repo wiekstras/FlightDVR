@@ -44,8 +44,8 @@ it, and add eased speed ramps.
   Apple VideoToolbox hardware encoding is offered when a *test encode* proves it
   works — not when ffmpeg merely claims to support it.
 - **Deliver** — Social exports can target TikTok, Instagram Reels, YouTube
-  Shorts (9:16) or YouTube (16:9). Footage is padded to the destination canvas
-  instead of cropped, keeping the entire FPV frame intact.
+  Shorts (9:16) or YouTube (16:9). Choose **Fit** to preserve the entire FPV
+  frame or **Fill** for an edge-to-edge social crop.
 - **Stitch** — tick two or more compatible clips and create one continuous,
   shareable sequence in the current list order.
 

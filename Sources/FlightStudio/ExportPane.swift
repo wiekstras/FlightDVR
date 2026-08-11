@@ -44,6 +44,17 @@ struct ExportPane: View {
                                 Text("\(profile.rawValue) · \(profile.canvasLabel)").tag(profile)
                             }
                         }
+                        Picker("Framing", selection: $settings.socialFraming) {
+                            ForEach(SocialFraming.allCases) { framing in
+                                Text(framing.rawValue).tag(framing)
+                            }
+                        }
+                        Text(settings.socialFraming == .fit
+                             ? "Keeps the full recording and adds padding where needed."
+                             : "Fills the canvas edge to edge by cropping the sides.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         HStack {
                             Slider(value: $settings.socialTargetMB, in: 5...200, step: 5)
                             Text("\(Int(settings.socialTargetMB)) MB")

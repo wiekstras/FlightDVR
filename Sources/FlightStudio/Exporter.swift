@@ -64,14 +64,22 @@ enum SocialProfile: String, CaseIterable, Identifiable {
 
     var canvasLabel: String { isVertical ? "1080 × 1920 · 9:16" : "1920 × 1080 · 16:9" }
     var isVertical: Bool { self != .youtube }
-    /// Letterbox/pillarbox rather than crop: an FPV frame must never lose a
-    /// gate or a prop simply to meet a platform canvas.
-    var videoFilter: String {
+    func videoFilter(framing: SocialFraming) -> String {
+        let size = isVertical ? "1080:1920" : "1920:1080"
+        if framing == .fill {
+            return "scale=\(size):force_original_aspect_ratio=increase,crop=\(size)"
+        }
         if isVertical {
             return "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
         }
         return "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black"
     }
+}
+
+enum SocialFraming: String, CaseIterable, Identifiable {
+    case fit = "Fit entire frame"
+    case fill = "Fill canvas"
+    var id: String { rawValue }
 }
 
 struct ExportSettings {
@@ -81,6 +89,7 @@ struct ExportSettings {
     var masterQuality: MasterQuality = .high
     var socialTargetMB: Double = 25
     var socialProfile: SocialProfile = .tiktok
+    var socialFraming: SocialFraming = .fit
     var keepAudio = true
     var useHardware = false
     var outputFolder: URL?
@@ -350,7 +359,7 @@ enum ExportCommandBuilder {
                                              sourceHasAudio: settings.keepAudio && info.hasAudio,
                                              fixColorRange: fixRange,
                                              outputVideoFilter: settings.preset == .social
-                                                ? settings.socialProfile.videoFilter : nil)
+                                                ? settings.socialProfile.videoFilter(framing: settings.socialFraming) : nil)
 
         var inputs: [String] = ["-i", src.path]
         if graph.needsMusicInput, let music = effectivePlan.music {

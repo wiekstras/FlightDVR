@@ -576,7 +576,7 @@ final class ClipStore: ObservableObject {
         guard !pending.isEmpty else { return }
         metadataLoadTask?.task.cancel()
         let taskID = UUID()
-        let task = Task.detached(priority: .utility) { [weak self] in
+        let task: Task<Void, Never> = Task.detached(priority: .utility) { [weak self] in
             await withTaskGroup(of: Void.self) { group in
                 var iterator = pending.makeIterator()
                 func addNext(_ group: inout TaskGroup<Void>) -> Bool {

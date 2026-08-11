@@ -77,7 +77,7 @@ enum OutputNamer {
             ? "Untitled clip" : baseName
         var index = 1
         while true {
-            let suffix = index == 1 ? "" : " \\(index)"
+            let suffix = index == 1 ? "" : " \(index)"
             let candidate = folder.appendingPathComponent("\(safeBase)\(suffix).\(fileExtension)")
             if !reserved.contains(candidate) && !fileExists(candidate) { return candidate }
             index += 1

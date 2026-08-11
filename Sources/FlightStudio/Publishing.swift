@@ -300,16 +300,19 @@ final class PublishJob: ObservableObject, Identifiable {
     let exportURL: URL
     let settings: ExportSettings
     let draft: PublishDraft
+    /// Makes an export→publish handoff idempotent across process crashes.
+    let sourceExportID: UUID?
     @Published var states: [PublishingPlatform: State]
     @Published var progress: [PublishingPlatform: Double] = [:]
 
     init(id: UUID = UUID(), exportURL: URL, settings: ExportSettings, draft: PublishDraft,
          states: [PublishingPlatform: State]? = nil,
-         progress: [PublishingPlatform: Double] = [:]) {
+         progress: [PublishingPlatform: Double] = [:], sourceExportID: UUID? = nil) {
         self.id = id
         self.exportURL = exportURL
         self.settings = settings
         self.draft = draft
+        self.sourceExportID = sourceExportID
         self.states = states ?? Dictionary(uniqueKeysWithValues: draft.platforms.map { ($0, .queued) })
         self.progress = progress
     }
@@ -325,16 +328,18 @@ struct PublishJobSnapshot: Codable, Equatable {
     var draft: PublishDraft
     var states: [PublishingPlatform: PublishState]
     var progress: [PublishingPlatform: Double]
+    var sourceExportID: UUID?
 
     init(id: UUID, exportURL: URL, settings: ExportSettings, draft: PublishDraft,
          states: [PublishingPlatform: PublishState],
-         progress: [PublishingPlatform: Double]) {
+         progress: [PublishingPlatform: Double], sourceExportID: UUID? = nil) {
         self.id = id
         self.exportURL = exportURL
         self.settings = settings
         self.draft = draft
         self.states = states
         self.progress = progress
+        self.sourceExportID = sourceExportID
     }
 
     @MainActor init(job: PublishJob) {
@@ -344,6 +349,7 @@ struct PublishJobSnapshot: Codable, Equatable {
         draft = job.draft
         states = job.states
         progress = job.progress
+        sourceExportID = job.sourceExportID
     }
 
     /// A process cannot resume an arbitrary provider request. Preserve completed
@@ -405,7 +411,8 @@ final class PublishQueue: ObservableObject {
         do {
             jobs = try PublishQueueStore.load(from: persistenceURL).map {
                 PublishJob(id: $0.id, exportURL: $0.exportURL, settings: $0.settings,
-                           draft: $0.draft, states: $0.states, progress: $0.progress)
+                           draft: $0.draft, states: $0.states, progress: $0.progress,
+                           sourceExportID: $0.sourceExportID)
             }
         } catch {
             jobs = []
@@ -414,13 +421,23 @@ final class PublishQueue: ObservableObject {
     }
 
     func enqueue(export: ExportJob, draft: PublishDraft) -> [PublishIssue] {
+        enqueueJob(export: export, draft: draft).issues
+    }
+
+    func enqueueJob(export: ExportJob, draft: PublishDraft)
+        -> (job: PublishJob?, issues: [PublishIssue]) {
         let issues = PublishValidator.validate(
             draft: draft, settings: export.settings, media: export.outputInfo,
             fileExists: FileManager.default.fileExists(atPath: export.outputURL.path))
-        guard !issues.contains(where: { $0.severity == .error }) else { return issues }
-        jobs.append(PublishJob(exportURL: export.outputURL, settings: export.settings, draft: draft))
+        guard !issues.contains(where: { $0.severity == .error }) else { return (nil, issues) }
+        if let existing = jobs.first(where: { $0.sourceExportID == export.id }) {
+            return (existing, issues)
+        }
+        let job = PublishJob(exportURL: export.outputURL, settings: export.settings,
+                             draft: draft, sourceExportID: export.id)
+        jobs.append(job)
         persist()
-        return issues
+        return (job, issues)
     }
 
     func start(_ job: PublishJob) {

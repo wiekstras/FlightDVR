@@ -346,6 +346,7 @@ final class ExportJob: ObservableObject, Identifiable {
     @Published var state: State = .waiting
     @Published var progress: Double = 0      // 0…1
     @Published var outputInfo: ClipInfo?
+    @Published var pendingPublishDraft: PublishDraft?
     nonisolated(unsafe) var cancelFlag = false
 
     var clip: Clip { clips[0] }
@@ -357,7 +358,8 @@ final class ExportJob: ObservableObject, Identifiable {
     }
 
     init(id: UUID = UUID(), clips: [Clip], settings: ExportSettings, outputURL: URL,
-         state: State = .waiting, progress: Double = 0, outputInfo: ClipInfo? = nil) {
+         state: State = .waiting, progress: Double = 0, outputInfo: ClipInfo? = nil,
+         pendingPublishDraft: PublishDraft? = nil) {
         precondition(!clips.isEmpty, "an export needs at least one clip")
         self.id = id
         self.clips = clips
@@ -366,6 +368,7 @@ final class ExportJob: ObservableObject, Identifiable {
         self.state = state
         self.progress = progress
         self.outputInfo = outputInfo
+        self.pendingPublishDraft = pendingPublishDraft
     }
 }
 
@@ -383,6 +386,7 @@ struct ExportJobSnapshot: Codable, Equatable {
     var state: ExportState
     var progress: Double
     var outputInfo: ClipInfo?
+    var pendingPublishDraft: PublishDraft?
 
     @MainActor init(job: ExportJob) {
         id = job.id
@@ -392,10 +396,12 @@ struct ExportJobSnapshot: Codable, Equatable {
         state = job.state
         progress = job.progress
         outputInfo = job.outputInfo
+        pendingPublishDraft = job.pendingPublishDraft
     }
 
     init(id: UUID, clips: [ExportClipSnapshot], settings: ExportSettings, outputURL: URL,
-         state: ExportState, progress: Double, outputInfo: ClipInfo? = nil) {
+         state: ExportState, progress: Double, outputInfo: ClipInfo? = nil,
+         pendingPublishDraft: PublishDraft? = nil) {
         self.id = id
         self.clips = clips
         self.settings = settings
@@ -403,6 +409,7 @@ struct ExportJobSnapshot: Codable, Equatable {
         self.state = state
         self.progress = progress
         self.outputInfo = outputInfo
+        self.pendingPublishDraft = pendingPublishDraft
     }
 
     func recoveringInterruptedEncode() -> ExportJobSnapshot {
@@ -453,6 +460,7 @@ final class ExportQueue: ObservableObject {
     @Published var isRunning = false
     @Published var currentMessage = ""
     @Published private(set) var persistenceError: String?
+    var publishHandoff: ((ExportJob, PublishDraft) -> Bool)?
     private let persistenceURL: URL
     private var saveWorkItem: DispatchWorkItem?
 
@@ -476,7 +484,8 @@ final class ExportQueue: ObservableObject {
                 }
                 let job = ExportJob(id: snapshot.id, clips: clips, settings: snapshot.settings,
                                     outputURL: snapshot.outputURL, state: state,
-                                    progress: snapshot.progress, outputInfo: snapshot.outputInfo)
+                                    progress: snapshot.progress, outputInfo: snapshot.outputInfo,
+                                    pendingPublishDraft: snapshot.pendingPublishDraft)
                 try? FileManager.default.removeItem(at: job.stagingURL)
                 return job
             }
@@ -505,6 +514,34 @@ final class ExportQueue: ObservableObject {
             jobs.append(ExportJob(clips: [clip], settings: settings, outputURL: out))
         }
         persist()
+    }
+
+    func enqueueForPublishing(clip: Clip, settings: ExportSettings,
+                              draft: PublishDraft) -> [PublishIssue] {
+        let issues = PublishValidator.validate(draft: draft, settings: settings)
+        guard !issues.contains(where: { $0.severity == .error }) else { return issues }
+        let folder = settings.resolvedOutputFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let base = clip.url.deletingPathExtension().lastPathComponent
+        let out = OutputNamer.uniqueURL(in: folder, baseName: base,
+                                        fileExtension: settings.preset.fileExtension,
+                                        reserved: Set(jobs.map(\.outputURL)))
+        // Freeze the non-destructive edit now. The creator can keep working
+        // without changing an export that is already queued for publishing.
+        let variant = Clip.exportVariant(from: clip, edit: clip.edit)
+        jobs.append(ExportJob(clips: [variant], settings: settings, outputURL: out,
+                              pendingPublishDraft: draft))
+        persist()
+        start()
+        return issues
+    }
+
+    /// Called after the app wires both durable queues together. Completed
+    /// exports may still have a handoff after a crash between encode and upload.
+    func resumePublishHandoffs() {
+        for job in jobs where job.state == .done && job.pendingPublishDraft != nil {
+            attemptPublishHandoff(job)
+        }
     }
 
     func enqueueHighlights(from clip: Clip, settings: ExportSettings) {
@@ -625,6 +662,7 @@ final class ExportQueue: ObservableObject {
                 try promoteStagingOutput(for: job)
                 job.state = .done
                 job.progress = 1
+                attemptPublishHandoff(job)
             } catch is CancellationError {
                 job.state = .cancelled
                 try? FileManager.default.removeItem(at: job.stagingURL)
@@ -637,6 +675,13 @@ final class ExportQueue: ObservableObject {
         }
         isRunning = false
         currentMessage = ""
+    }
+
+    private func attemptPublishHandoff(_ job: ExportJob) {
+        guard let draft = job.pendingPublishDraft, let publishHandoff,
+              publishHandoff(job, draft) else { return }
+        job.pendingPublishDraft = nil
+        persist()
     }
 
     /// The final filename is never exposed until ffmpeg has completed. Existing

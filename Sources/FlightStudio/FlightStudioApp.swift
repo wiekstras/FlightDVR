@@ -2,12 +2,27 @@ import SwiftUI
 
 @main
 struct FlightStudioApp: App {
-    @StateObject private var store = ClipStore()
-    @StateObject private var queue = ExportQueue()
-    @StateObject private var publishQueue = PublishQueue()
+    @StateObject private var store: ClipStore
+    @StateObject private var queue: ExportQueue
+    @StateObject private var publishQueue: PublishQueue
 
     init() {
         SelfTest.runIfRequested()
+        let store = ClipStore()
+        let publishQueue = PublishQueue()
+        let exportQueue = ExportQueue()
+        exportQueue.publishHandoff = { [weak publishQueue] export, draft in
+            guard let publishQueue else { return false }
+            let result = publishQueue.enqueueJob(export: export, draft: draft)
+            guard let job = result.job,
+                  !result.issues.contains(where: { $0.severity == .error }) else { return false }
+            publishQueue.start(job)
+            return true
+        }
+        exportQueue.resumePublishHandoffs()
+        _store = StateObject(wrappedValue: store)
+        _queue = StateObject(wrappedValue: exportQueue)
+        _publishQueue = StateObject(wrappedValue: publishQueue)
     }
 
     var body: some Scene {

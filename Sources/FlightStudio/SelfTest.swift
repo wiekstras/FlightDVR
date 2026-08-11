@@ -334,10 +334,14 @@ enum SelfTest {
         // Export jobs survive relaunches with their exact edit and probe data.
         // A running job recovers as retryable, never as a completed output.
         let exportJobID = UUID()
+        var pendingPublishDraft = PublishDraft()
+        pendingPublishDraft.title = "Queued highlight"
+        pendingPublishDraft.platforms = [.youtube]
         let exportSnapshot = ExportJobSnapshot(
             id: exportJobID,
             clips: [ExportClipSnapshot(url: src, info: info, edit: plan)],
-            settings: ExportSettings(), outputURL: first, state: .running, progress: 0.6)
+            settings: ExportSettings(), outputURL: first, state: .running, progress: 0.6,
+            pendingPublishDraft: pendingPublishDraft)
         let exportJournalURL = workDir.appendingPathComponent("export-queue.json")
         try ExportQueueStore.save([exportSnapshot], to: exportJournalURL)
         let recoveredExports = try ExportQueueStore.load(from: exportJournalURL)
@@ -345,6 +349,7 @@ enum SelfTest {
               recoveredExports[0].id == exportJobID,
               recoveredExports[0].clips[0].edit == plan,
               recoveredExports[0].clips[0].info == info,
+              recoveredExports[0].pendingPublishDraft == pendingPublishDraft,
               recoveredExports[0].state == .failed(
                 "Export was interrupted. The incomplete staging file was removed; retry when ready."),
               recoveredExports[0].progress == 0 else {
@@ -536,12 +541,14 @@ enum SelfTest {
         recoveryDraft.platforms = [.youtube, .tiktok]
         let publishSnapshot = PublishJobSnapshot(
             id: UUID(), exportURL: stitchOut, settings: publishSettings, draft: recoveryDraft,
-            states: [.youtube: .uploaded, .tiktok: .uploading], progress: [.youtube: 1, .tiktok: 0.4])
+            states: [.youtube: .uploaded, .tiktok: .uploading],
+            progress: [.youtube: 1, .tiktok: 0.4], sourceExportID: exportJobID)
         let journalURL = workDir.appendingPathComponent("publish-queue.json")
         try PublishQueueStore.save([publishSnapshot], to: journalURL)
         let recoveredPublish = try PublishQueueStore.load(from: journalURL)
         guard recoveredPublish.count == 1,
               recoveredPublish[0].id == publishSnapshot.id,
+              recoveredPublish[0].sourceExportID == exportJobID,
               recoveredPublish[0].states[.youtube] == .uploaded,
               recoveredPublish[0].states[.tiktok] == .failed("Upload was interrupted. Retry when connected."),
               recoveredPublish[0].progress[.tiktok] == 0.4 else {

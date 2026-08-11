@@ -66,6 +66,10 @@ it, and add eased speed ramps.
   disk. Completed destinations survive relaunches, while interrupted uploads
   return as explicit retryable failures instead of disappearing. One Publish
   click starts every destination, and one failed platform can retry independently.
+- **Export & Publish handoff** — the current edit can be queued for social
+  delivery in one action. DVR Studio freezes that edit, encodes and verifies it,
+  then durably hands it to the publishing queue without blocking further edits;
+  an interrupted handoff resumes idempotently after relaunch.
 - **Recoverable publishing composer** — titles, captions, hashtags, visibility
   and platform choices are saved while typing, with live delivery preflight for
   canvas, codec, duration, frame rate, dimensions and API file-size limits.

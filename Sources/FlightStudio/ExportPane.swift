@@ -76,6 +76,14 @@ struct ExportPane: View {
                             if panel.runModal() == .OK { settings.outputFolder = panel.url }
                         }
                         .controlSize(.small)
+                        Button {
+                            let folder = settings.resolvedOutputFolder
+                            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                            NSWorkspace.shared.open(folder)
+                        } label: {
+                            Image(systemName: "folder")
+                        }
+                        .help("Reveal output folder")
                     }
                     HStack(spacing: 6) {
                         Button("Add ticked") {

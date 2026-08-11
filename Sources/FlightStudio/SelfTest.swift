@@ -424,6 +424,14 @@ enum SelfTest {
             .contains(where: { $0.severity == .error }) else {
             throw Failure("valid social publishing draft was rejected")
         }
+        let wrongCanvas = ClipInfo(duration: 12, width: 1920, height: 1080, fps: 60,
+                                   videoCodec: "h264", hasAudio: true,
+                                   colorRange: "tv", fileSize: 2_000_000)
+        guard PublishValidator.validate(draft: publishDraft, settings: socialSettings,
+                                        media: wrongCanvas, fileExists: true)
+            .contains(where: { $0.severity == .error && $0.message.contains("expected 1080×1920") }) else {
+            throw Failure("wrong social delivery canvas passed publishing preflight")
+        }
         var invalidPublishSettings = ExportSettings()
         invalidPublishSettings.preset = .master
         guard PublishValidator.validate(draft: publishDraft, settings: invalidPublishSettings)

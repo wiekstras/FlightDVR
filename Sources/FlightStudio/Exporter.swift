@@ -194,6 +194,7 @@ final class ExportJob: ObservableObject, Identifiable {
     let outputURL: URL
     @Published var state: State = .waiting
     @Published var progress: Double = 0      // 0…1
+    @Published var outputInfo: ClipInfo?
     nonisolated(unsafe) var cancelFlag = false
 
     var clip: Clip { clips[0] }
@@ -205,7 +206,7 @@ final class ExportJob: ObservableObject, Identifiable {
     }
 
     init(id: UUID = UUID(), clips: [Clip], settings: ExportSettings, outputURL: URL,
-         state: State = .waiting, progress: Double = 0) {
+         state: State = .waiting, progress: Double = 0, outputInfo: ClipInfo? = nil) {
         precondition(!clips.isEmpty, "an export needs at least one clip")
         self.id = id
         self.clips = clips
@@ -213,6 +214,7 @@ final class ExportJob: ObservableObject, Identifiable {
         self.outputURL = outputURL
         self.state = state
         self.progress = progress
+        self.outputInfo = outputInfo
     }
 }
 
@@ -229,6 +231,7 @@ struct ExportJobSnapshot: Codable, Equatable {
     var outputURL: URL
     var state: ExportState
     var progress: Double
+    var outputInfo: ClipInfo?
 
     @MainActor init(job: ExportJob) {
         id = job.id
@@ -237,16 +240,18 @@ struct ExportJobSnapshot: Codable, Equatable {
         outputURL = job.outputURL
         state = job.state
         progress = job.progress
+        outputInfo = job.outputInfo
     }
 
     init(id: UUID, clips: [ExportClipSnapshot], settings: ExportSettings, outputURL: URL,
-         state: ExportState, progress: Double) {
+         state: ExportState, progress: Double, outputInfo: ClipInfo? = nil) {
         self.id = id
         self.clips = clips
         self.settings = settings
         self.outputURL = outputURL
         self.state = state
         self.progress = progress
+        self.outputInfo = outputInfo
     }
 
     func recoveringInterruptedEncode() -> ExportJobSnapshot {
@@ -321,7 +326,7 @@ final class ExportQueue: ObservableObject {
                 }
                 let job = ExportJob(id: snapshot.id, clips: clips, settings: snapshot.settings,
                                     outputURL: snapshot.outputURL, state: state,
-                                    progress: snapshot.progress)
+                                    progress: snapshot.progress, outputInfo: snapshot.outputInfo)
                 try? FileManager.default.removeItem(at: job.stagingURL)
                 return job
             }
@@ -411,6 +416,7 @@ final class ExportQueue: ObservableObject {
         guard job.state.canRetry else { return }
         job.cancelFlag = false
         job.progress = 0
+        job.outputInfo = nil
         job.state = .waiting
         try? FileManager.default.removeItem(at: job.stagingURL)
         persist()
@@ -437,12 +443,14 @@ final class ExportQueue: ObservableObject {
         while let job = jobs.first(where: { $0.state == .waiting }) {
             job.state = .running
             job.progress = 0
+            job.outputInfo = nil
             try? FileManager.default.removeItem(at: job.stagingURL)
             persist()
             currentMessage = "Exporting \(job.displayName)…"
             do {
                 try await runJob(job)
                 if job.cancelFlag { throw CancellationError() }
+                job.outputInfo = try await verifyStagingOutput(for: job)
                 try promoteStagingOutput(for: job)
                 job.state = .done
                 job.progress = 1
@@ -463,6 +471,19 @@ final class ExportQueue: ObservableObject {
     /// exports remain intact if a replacement encode fails or the app crashes.
     private func promoteStagingOutput(for job: ExportJob) throws {
         try ExportOutput.promote(stagingURL: job.stagingURL, to: job.outputURL)
+    }
+
+    private func verifyStagingOutput(for job: ExportJob) async throws -> ClipInfo {
+        let stagingURL = job.stagingURL
+        let info = try await Task.detached(priority: .userInitiated) {
+            try Probe.probe(stagingURL)
+        }.value
+        guard info.duration > 0.05, info.width > 0, info.height > 0,
+              info.fileSize > 0, info.videoCodec != "?" else {
+            throw FFmpeg.ProcessError(command: "verify export",
+                                      stderr: "The encoded file could not be verified as playable video.")
+        }
+        return info
     }
 
     private func runJob(_ job: ExportJob) async throws {

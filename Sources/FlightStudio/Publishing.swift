@@ -48,7 +48,8 @@ struct PublishIssue: Identifiable, Equatable {
 /// Validates the planned output before anything is encoded or uploaded. The
 /// checks are conservative so providers can add requirements independently.
 enum PublishValidator {
-    static func validate(draft: PublishDraft, settings: ExportSettings) -> [PublishIssue] {
+    static func validate(draft: PublishDraft, settings: ExportSettings,
+                         media: ClipInfo? = nil, fileExists: Bool? = nil) -> [PublishIssue] {
         var issues: [PublishIssue] = []
         if draft.platforms.isEmpty {
             issues.append(PublishIssue(severity: .error, message: "Choose at least one platform."))
@@ -59,6 +60,32 @@ enum PublishValidator {
         if settings.preset == .remux {
             issues.append(PublishIssue(severity: .error,
                                        message: "Remux exports are not delivery-safe; choose Master or Social."))
+        }
+        if fileExists == false {
+            issues.append(PublishIssue(severity: .error,
+                                       message: "The exported video is missing."))
+        }
+        if fileExists == true, media == nil {
+            issues.append(PublishIssue(severity: .error,
+                                       message: "The exported video has not been verified yet."))
+        }
+        if let media {
+            if media.duration <= 0.05 || media.width <= 0 || media.height <= 0 || media.fileSize <= 0 {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "The exported video could not be verified as playable."))
+            }
+            if settings.preset == .social {
+                let expected = settings.socialProfile.isVertical ? (1080, 1920) : (1920, 1080)
+                if media.width != expected.0 || media.height != expected.1 {
+                    issues.append(PublishIssue(
+                        severity: .error,
+                        message: "The export is \(media.width)×\(media.height), expected \(expected.0)×\(expected.1)."))
+                }
+                if media.videoCodec != "h264" {
+                    issues.append(PublishIssue(severity: .error,
+                                               message: "Social delivery requires an H.264 export."))
+                }
+            }
         }
         let vertical = settings.preset == .social && settings.socialProfile.isVertical
         if (draft.platforms.contains(.tiktok) || draft.platforms.contains(.instagram)) && !vertical {
@@ -260,7 +287,9 @@ final class PublishQueue: ObservableObject {
     }
 
     func enqueue(export: ExportJob, draft: PublishDraft) -> [PublishIssue] {
-        let issues = PublishValidator.validate(draft: draft, settings: export.settings)
+        let issues = PublishValidator.validate(
+            draft: draft, settings: export.settings, media: export.outputInfo,
+            fileExists: FileManager.default.fileExists(atPath: export.outputURL.path))
         guard !issues.contains(where: { $0.severity == .error }) else { return issues }
         jobs.append(PublishJob(exportURL: export.outputURL, settings: export.settings, draft: draft))
         persist()

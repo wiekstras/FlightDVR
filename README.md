@@ -51,8 +51,8 @@ it, and add eased speed ramps.
   return as explicit retryable failures instead of disappearing.
 - **Crash-safe exports** — queued export jobs survive relaunches, including
   their edit instructions and media metadata. Encoders write to private staging
-  files and atomically promote them only after completion, protecting both new
-  and replaced exports from partial-file corruption.
+  files, verify the result with ffprobe, and atomically promote it only after
+  completion, protecting new and replaced exports from partial-file corruption.
 - **Stitch** — tick two or more compatible clips and create one continuous,
   shareable sequence in the current list order.
 

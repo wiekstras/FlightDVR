@@ -256,6 +256,13 @@ struct PlayerPane: View {
         VStack(spacing: 0) {
             ZStack {
                 PlayerViewRepresentable(player: player.player)
+                if player.previewingEdit,
+                   let title = store.selectedClip?.edit.sanitized(duration: sourceDuration).title,
+                   title.isVisible(at: player.currentSourceTime) {
+                    TitlePreview(title: title)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
                 if !player.isReady {
                     ProgressView("Preparing preview…")
                         .padding(20)
@@ -335,6 +342,28 @@ struct PlayerPane: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
         }
+    }
+}
+
+private struct TitlePreview: View {
+    let title: TitleOverlay
+
+    var body: some View {
+        VStack {
+            if title.position != .top { Spacer() }
+            Text(title.text)
+                .font(.system(size: 28, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 6))
+                .shadow(radius: 2)
+            if title.position != .bottom { Spacer() }
+        }
+        .padding(.vertical, 28)
+        .padding(.horizontal, 40)
     }
 }
 

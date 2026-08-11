@@ -35,6 +35,36 @@ struct SourceAudioSettings: Equatable, Codable {
     }
 }
 
+enum TitlePosition: String, CaseIterable, Identifiable, Codable {
+    case top = "Top"
+    case center = "Center"
+    case bottom = "Bottom"
+    var id: String { rawValue }
+}
+
+struct TitleOverlay: Equatable, Codable {
+    var text: String
+    var start: Double
+    var end: Double
+    var position: TitlePosition = .bottom
+
+    func isVisible(at sourceTime: Double) -> Bool {
+        sourceTime >= start && sourceTime <= end
+    }
+
+    static func escapedForDrawText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: ":", with: "\\:")
+            .replacingOccurrences(of: ",", with: "\\,")
+            .replacingOccurrences(of: ";", with: "\\;")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+    }
+}
+
 /// A named, non-destructive bookmark for a moment worth returning to.
 struct TimelineMarker: Identifiable, Equatable, Codable {
     var id = UUID()
@@ -61,11 +91,13 @@ struct EditPlan: Equatable, Codable {
     var speedZones: [SpeedZone] = []
     var music: MusicTrack? = nil
     var sourceAudio: SourceAudioSettings? = nil
+    var title: TitleOverlay? = nil
     var markers: [TimelineMarker] = []
 
     var isDefault: Bool {
         inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty
             && music == nil && (sourceAudio?.isDefault ?? true)
+            && title == nil
     }
 
     /// Trim around a moment without exceeding the source. Near either edge the
@@ -152,6 +184,16 @@ struct EditPlan: Equatable, Codable {
             result.sourceAudio = audio.isDefault ? nil : audio
         } else {
             result.sourceAudio = nil
+        }
+        if var title = title {
+            title.text = String(title.text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+            title.start = min(max(title.start.isFinite ? title.start : result.inPoint,
+                                  result.inPoint), rangeEnd)
+            title.end = min(max(title.end.isFinite ? title.end : title.start,
+                                title.start), rangeEnd)
+            result.title = title.text.isEmpty || title.end - title.start < 0.05 ? nil : title
+        } else {
+            result.title = nil
         }
         return result
     }
@@ -348,6 +390,21 @@ enum FilterGraphBuilder {
         if let outputVideoFilter {
             lines.append("[\(vOut)]\(outputVideoFilter)[vdelivery]")
             vOut = "vdelivery"
+        }
+        if let title = plan.title {
+            let start = plan.outputTime(forSource: title.start, duration: duration)
+            let end = plan.outputTime(forSource: title.end, duration: duration)
+            let y: String
+            switch title.position {
+            case .top: y = "h*0.08"
+            case .center: y = "(h-text_h)/2"
+            case .bottom: y = "h-text_h-h*0.08"
+            }
+            let escaped = TitleOverlay.escapedForDrawText(title.text)
+            lines.append(String(
+                format: "[%@]drawtext=text='%@':expansion=none:font='Helvetica':fontcolor=white:fontsize=h*0.06:box=1:boxcolor=black@0.58:boxborderw=12:x=(w-text_w)/2:y=%@:enable='between(t,%.4f,%.4f)'[vtitle]",
+                vOut, escaped, y, start, end))
+            vOut = "vtitle"
         }
 
         var aOut: String? = nil

@@ -138,6 +138,8 @@ enum SelfTest {
         plan.speedZones = [SpeedZone(start: 5, end: 8, speed: 2.0)]
         plan.music = MusicTrack(url: music, volume: 0.5, fadeIn: 0.5, fadeOut: 1.0, muteOriginal: false)
         plan.sourceAudio = SourceAudioSettings(volume: 0.55, fadeIn: 0.25, fadeOut: 0.5)
+        plan.title = TitleOverlay(text: "Lap: 100% 'fast'", start: 1.5, end: 2.5,
+                                  position: .top)
 
         // 3a. Filename date parsing.
         let cal = Calendar.current
@@ -206,12 +208,13 @@ enum SelfTest {
                              speedZones: [SpeedZone(start: -1, end: 2, speed: 99, rampDuration: 9)],
                              sourceAudio: SourceAudioSettings(volume: .infinity,
                                                               fadeIn: -.infinity,
-                                                              fadeOut: .nan))
+                                                              fadeOut: .nan),
+                             title: TitleOverlay(text: "   ", start: -.infinity, end: .nan))
         messy = messy.sanitized(duration: info.duration)
         guard messy.inPoint == 0, messy.effectiveOut(duration: info.duration) == info.duration,
               messy.cuts.count == 1, messy.cuts[0].start == 2, messy.cuts[0].end == 6,
               messy.speedZones[0].speed == 4, messy.speedZones[0].rampDuration <= 1,
-              messy.sourceAudio == nil else {
+              messy.sourceAudio == nil, messy.title == nil else {
             throw Failure("edit sanitisation did not clamp and merge malformed ranges")
         }
         var empty = EditPlan(inPoint: 5, outPoint: 5)
@@ -371,6 +374,12 @@ enum SelfTest {
                 && $0.contains("afade=t=out")
         }) else {
             throw Failure("source audio volume and fades were missing from the export graph")
+        }
+        guard commands[0].contains(where: {
+            $0.contains("drawtext=text='Lap\\: 100% \\'fast\\''")
+                && $0.contains("enable='between(t,")
+        }) else {
+            throw Failure("timed title text, escaping or visibility was missing from the export graph")
         }
         print("running export…")
         try FFmpeg.run(commands[0])

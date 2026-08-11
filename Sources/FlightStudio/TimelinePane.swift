@@ -107,7 +107,8 @@ private struct TimelineEditor: View {
             .padding(.top, 8)
 
             // The bench: one flat row of tools, grouped by tracked labels.
-            HStack(alignment: .top, spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+              HStack(alignment: .top, spacing: 0) {
                 tool("Trim") {
                     Button("In") { clip.edit.inPoint = player.currentSourceTime }
                         .keyboardShortcut("i", modifiers: [])
@@ -171,6 +172,10 @@ private struct TimelineEditor: View {
                     .help("Add marker (M)")
                 }
                 benchDivider
+                tool("Title") {
+                    TitleControls(clip: clip, player: player, duration: duration)
+                }
+                benchDivider
                 tool("Audio") {
                     AudioControls(clip: clip)
                 }
@@ -197,6 +202,7 @@ private struct TimelineEditor: View {
                     .help("Redo edit (⇧⌘Z)")
                 }
                 Spacer()
+              }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -249,6 +255,83 @@ private struct TimelineEditor: View {
         } catch {
             projectError = error.localizedDescription
         }
+    }
+}
+
+private struct TitleControls: View {
+    @ObservedObject var clip: Clip
+    @ObservedObject var player: PlayerController
+    let duration: Double
+    @State private var showingInspector = false
+
+    var body: some View {
+        Button {
+            if clip.edit.title == nil {
+                let out = clip.edit.effectiveOut(duration: duration)
+                let start = min(max(player.currentSourceTime, clip.edit.inPoint),
+                                max(clip.edit.inPoint, out - 0.05))
+                let end = min(start + 3, out)
+                clip.edit.title = TitleOverlay(text: "Title", start: start,
+                                               end: end)
+            }
+            showingInspector.toggle()
+        } label: {
+            Label(clip.edit.title == nil ? "Add…" : "Edit…", systemImage: "textformat")
+        }
+        .disabled(duration <= 0)
+        .popover(isPresented: $showingInspector, arrowEdge: .bottom) {
+            if clip.edit.title != nil {
+                VStack(alignment: .leading, spacing: 12) {
+                    Eyebrow("Timed Title")
+                    TextField("Title", text: titleBinding(\.text))
+                    Picker("Position", selection: titleBinding(\.position)) {
+                        ForEach(TitlePosition.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    LabeledContent("Visible") {
+                        Text("\(timecode(clip.edit.title?.start ?? 0))–\(timecode(clip.edit.title?.end ?? 0))")
+                            .font(.caption.monospacedDigit())
+                    }
+                    HStack {
+                        Button("Set Start") {
+                            let out = clip.edit.effectiveOut(duration: duration)
+                            clip.edit.title?.start = min(max(player.currentSourceTime,
+                                                             clip.edit.inPoint), max(clip.edit.inPoint, out - 0.05))
+                            clip.edit.title?.end = min(out, max(clip.edit.title?.end ?? 0,
+                                                                (clip.edit.title?.start ?? 0) + 0.05))
+                        }
+                        Button("Set End") {
+                            let start = clip.edit.title?.start ?? clip.edit.inPoint
+                            clip.edit.title?.end = min(max(player.currentSourceTime,
+                                                           start + 0.05),
+                                                       clip.edit.effectiveOut(duration: duration))
+                        }
+                    }
+                    Button("Remove title", role: .destructive) {
+                        clip.edit.title = nil
+                        showingInspector = false
+                    }
+                }
+                .controlSize(.small)
+                .padding(14)
+                .frame(width: 300)
+            }
+        }
+    }
+
+    private func titleBinding<Value>(_ keyPath: WritableKeyPath<TitleOverlay, Value>) -> Binding<Value> {
+        Binding(
+            get: { clip.edit.title![keyPath: keyPath] },
+            set: { value in
+                guard var title = clip.edit.title else { return }
+                title[keyPath: keyPath] = value
+                clip.edit.title = title
+            }
+        )
+    }
+
+    private func timecode(_ seconds: Double) -> String {
+        EditorTimecode.string(seconds: seconds, fps: clip.info?.fps ?? 0)
     }
 }
 

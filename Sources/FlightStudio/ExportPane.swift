@@ -85,7 +85,7 @@ struct ExportPane: View {
                                 .frame(width: 52, alignment: .trailing)
                         }
                     case .remux:
-                        Text("Trim cuts land on keyframes; edits, music and speed ramps are ignored.")
+                        Text("Trim cuts land on keyframes; cuts, titles, audio mixing and speed ramps are ignored.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)

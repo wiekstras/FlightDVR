@@ -32,6 +32,7 @@ it, and add eased speed ramps.
     choice of mixing under the clip audio or replacing it
   - **clip audio mix** with independent volume, mute, fade in and fade out,
     previewed live and rendered identically during export
+  - **timed titles** at the top, centre or bottom, previewed live and burned into export
   - **project files** — save an edit as a portable `.flightedit.json` sidecar
     and reopen it later without copying the source footage
   - **automatic recovery** — every edit is also saved as a local draft as it is

@@ -27,16 +27,44 @@ private struct TimelineEditor: View {
     @Binding var newZoneSpeed: Double
     @State private var projectError: String?
     @State private var highlightLength: Double = 30
+    @State private var timelineZoom: Double = 1
 
     var duration: Double { clip.info?.duration ?? player.duration }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TimelineBar(clip: clip, player: player, duration: duration,
-                        pendingCutStart: pendingCutStart, pendingSpeedStart: pendingSpeedStart)
-                .frame(height: 74)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
+            HStack(spacing: 7) {
+                Eyebrow("Timeline")
+                Spacer()
+                Image(systemName: "minus.magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Slider(value: $timelineZoom, in: 1...20, step: 1)
+                    .frame(width: 110)
+                    .help("Zoom the timeline for precise work on long recordings")
+                Image(systemName: "plus.magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Text("\(Int(timelineZoom))×")
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 28, alignment: .trailing)
+                Button("Fit") { timelineZoom = 1 }
+                    .controlSize(.mini)
+                    .disabled(timelineZoom == 1)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+
+            GeometryReader { viewport in
+                ScrollView(.horizontal) {
+                    TimelineBar(clip: clip, player: player, duration: duration,
+                                pendingCutStart: pendingCutStart,
+                                pendingSpeedStart: pendingSpeedStart)
+                        .frame(width: max(viewport.size.width * timelineZoom, viewport.size.width),
+                               height: 74)
+                }
+                .scrollIndicators(.visible)
+            }
+            .frame(height: 74)
+            .padding(.horizontal, 16)
 
             if !clip.edit.cuts.isEmpty || !clip.edit.speedZones.isEmpty || !clip.edit.markers.isEmpty {
                 EditChips(clip: clip, player: player)
@@ -357,6 +385,7 @@ private struct TimelineBar: View {
 
     private let rulerHeight: CGFloat = 16
     private let handleHeight: CGFloat = 12
+    private var fps: Double { clip.info?.fps ?? 0 }
 
     var body: some View {
         GeometryReader { geo in
@@ -423,7 +452,8 @@ private struct TimelineBar: View {
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             guard duration > 0, w > 0 else { return }
-                            let t = Double(min(max(value.location.x / w, 0), 1)) * duration
+                            let raw = Double(min(max(value.location.x / w, 0), 1)) * duration
+                            let t = TimelineMath.snappedTime(raw, fps: fps, duration: duration)
                             player.seekSource(to: t)
                         }
                 )
@@ -457,7 +487,8 @@ private struct TimelineBar: View {
                 DragGesture(minimumDistance: 1)
                     .onChanged { value in
                         guard duration > 0, width > 0 else { return }
-                        let t = Double(min(max((xPos + value.translation.width) / width, 0), 1)) * duration
+                        let raw = Double(min(max((xPos + value.translation.width) / width, 0), 1)) * duration
+                        let t = TimelineMath.snappedTime(raw, fps: fps, duration: duration)
                         update(t)
                     }
             )

@@ -84,6 +84,14 @@ enum SelfTest {
         }
         print("frame-rate parsing ok")
 
+        let snapped = TimelineMath.snappedTime(1.011, fps: 60, duration: 10)
+        guard abs(snapped - (61.0 / 60.0)) < 0.000_001,
+              TimelineMath.snappedTime(-2, fps: 60, duration: 10) == 0,
+              TimelineMath.snappedTime(12, fps: 60, duration: 10) == 10 else {
+            throw Failure("timeline frame snapping produced invalid source times")
+        }
+        print("timeline frame snapping ok")
+
         // 3. An edit that uses everything: trim 1–9, cut out 3–4, 2× ramp over 5–8, music under it.
         var plan = EditPlan()
         plan.inPoint = 1

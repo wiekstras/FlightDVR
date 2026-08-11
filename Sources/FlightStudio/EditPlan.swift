@@ -31,6 +31,17 @@ struct TimelineMarker: Identifiable, Equatable, Codable {
     var name: String
 }
 
+enum TimelineMath {
+    /// Quantize pointer-driven edits to real source-frame boundaries. Unknown or
+    /// malformed frame rates fall back to millisecond precision.
+    static func snappedTime(_ time: Double, fps: Double, duration: Double) -> Double {
+        guard time.isFinite, duration.isFinite, duration > 0 else { return 0 }
+        let clamped = min(max(time, 0), duration)
+        guard fps.isFinite, fps > 0 else { return (clamped * 1_000).rounded() / 1_000 }
+        return min(max((clamped * fps).rounded() / fps, 0), duration)
+    }
+}
+
 /// Everything the user has done to one clip.
 struct EditPlan: Equatable, Codable {
     var inPoint: Double = 0

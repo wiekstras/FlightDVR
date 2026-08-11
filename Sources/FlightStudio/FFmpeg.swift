@@ -144,6 +144,7 @@ enum Probe {
             let width: Int?
             let height: Int?
             let avg_frame_rate: String?
+            let r_frame_rate: String?
             let color_range: String?
         }
         struct Format: Decodable {
@@ -152,6 +153,20 @@ enum Probe {
         }
         let streams: [Stream]?
         let format: Format?
+    }
+
+    /// ffprobe reports rates as rationals (including the unusable `0/0` for
+    /// some transport streams). Keep this parsing separate and testable.
+    static func frameRate(from value: String?) -> Double? {
+        guard let value else { return nil }
+        let parts = value.split(separator: "/", omittingEmptySubsequences: false)
+        if parts.count == 2, let numerator = Double(parts[0]), let denominator = Double(parts[1]),
+           numerator.isFinite, denominator.isFinite, denominator > 0 {
+            let rate = numerator / denominator
+            return rate > 0 && rate.isFinite ? rate : nil
+        }
+        guard let rate = Double(value), rate > 0, rate.isFinite else { return nil }
+        return rate
     }
 
     static func probe(_ url: URL) throws -> ClipInfo {
@@ -179,15 +194,10 @@ enum Probe {
         let video = decoded.streams?.first { $0.codec_type == "video" }
         let audio = decoded.streams?.first { $0.codec_type == "audio" }
 
-        var fps = 0.0
-        if let r = video?.avg_frame_rate {
-            let parts = r.split(separator: "/")
-            if parts.count == 2, let n = Double(parts[0]), let d = Double(parts[1]), d > 0 {
-                fps = n / d
-            } else if let n = Double(r) {
-                fps = n
-            }
-        }
+        // MPEG-TS sources sometimes give avg_frame_rate as 0/0; r_frame_rate
+        // remains useful in that case.
+        let fps = frameRate(from: video?.avg_frame_rate)
+            ?? frameRate(from: video?.r_frame_rate) ?? 0
         return ClipInfo(
             duration: Double(decoded.format?.duration ?? "") ?? 0,
             width: video?.width ?? 0,

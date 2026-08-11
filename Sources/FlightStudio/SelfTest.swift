@@ -68,6 +68,15 @@ enum SelfTest {
         guard !ClipStore.findVideoFiles(in: workDir, onlyTS: true, stopAtFirst: true).isEmpty else {
             throw Failure("stop-at-first .ts search found nothing")
         }
+        let scannedFiles = ClipStore.scanVideoFiles(in: workDir.appendingPathComponent("card"))
+        guard let scannedNested = scannedFiles.first(where: { $0.url == nestedClip.standardizedFileURL }),
+              scannedNested.fileDate != .distantPast else {
+            throw Failure("background scan descriptor missed filesystem metadata")
+        }
+        let injectedDate = Date(timeIntervalSince1970: 1_700_000_000)
+        guard Clip(url: nestedClip, fileDate: injectedDate).flightDate == injectedDate else {
+            throw Failure("clip ignored preloaded scan metadata")
+        }
         print("recursive scan ok: found nested clip at DCIM/100MEDIA")
 
         // 2. Probe it.

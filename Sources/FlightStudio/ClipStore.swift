@@ -52,6 +52,9 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
 }
 
 final class Clip: ObservableObject, Identifiable, Hashable {
+    private static let filenameDateRegex = try? NSRegularExpression(
+        pattern: #"(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})(?:[-_ T.]?(\d{2})[-_.:]?(\d{2})[-_.:]?(\d{2}))?"#
+    )
     let id: URL
     let url: URL
     @Published var info: ClipInfo?
@@ -85,12 +88,15 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     let fileDate: Date           // the filesystem's story
     let parsedDate: Date?        // a date found in the filename, which we trust more
 
-    init(url: URL) {
+    convenience init(url: URL) {
+        self.init(url: url, fileDate: Self.readFileDate(for: url))
+    }
+
+    init(url: URL, fileDate: Date) {
         self.url = url
         self.id = url
         self.relativeName = url.lastPathComponent
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        self.fileDate = (attrs?[.creationDate] ?? attrs?[.modificationDate]) as? Date ?? .distantPast
+        self.fileDate = fileDate
         self.parsedDate = Clip.parseDate(from: url.lastPathComponent)
         let record = ClipLibraryMetadataIndex.shared.record(for: url)
         self.favorite = record.favorite
@@ -161,9 +167,9 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     /// Finds yyyyMMdd / yyyy-MM-dd / yyyy_MM_dd in a filename, with an optional
     /// HHmmss / HH-mm-ss after it (e.g. hdz_20250712_143005.ts).
     static func parseDate(from name: String) -> Date? {
-        let pattern = #"(20\d{2})[-_.]?(\d{2})[-_.]?(\d{2})(?:[-_ T.]?(\d{2})[-_.:]?(\d{2})[-_.:]?(\d{2}))?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let m = regex.firstMatch(in: name, range: NSRange(name.startIndex..., in: name))
+        guard let regex = filenameDateRegex,
+              let m = regex.firstMatch(
+            in: name, range: NSRange(name.startIndex..., in: name))
         else { return nil }
         func group(_ i: Int) -> Int? {
             guard m.range(at: i).location != NSNotFound,
@@ -187,6 +193,11 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         return date
     }
 
+    static func readFileDate(for url: URL) -> Date {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attrs?[.creationDate] ?? attrs?[.modificationDate]) as? Date ?? .distantPast
+    }
+
     static func == (lhs: Clip, rhs: Clip) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
@@ -197,6 +208,11 @@ enum SortOrder: String, CaseIterable, Identifiable {
     case duration = "Length"
     case size = "Size"
     var id: String { rawValue }
+}
+
+struct ScannedVideoFile: Equatable, Sendable {
+    var url: URL
+    var fileDate: Date
 }
 
 @MainActor
@@ -289,6 +305,14 @@ final class ClipStore: ObservableObject {
         }
     }
 
+    /// Resolve filesystem attributes on the scanning worker, not while SwiftUI
+    /// is constructing thousands of observable Clip objects on the main actor.
+    nonisolated static func scanVideoFiles(in folder: URL, maxDepth: Int = 5) -> [ScannedVideoFile] {
+        findVideoFiles(in: folder, maxDepth: maxDepth).map {
+            ScannedVideoFile(url: $0, fileDate: Clip.readFileDate(for: $0))
+        }
+    }
+
     func findSDCard() {
         statusMessage = "Looking for a card…"
         Task.detached { [weak self] in
@@ -335,20 +359,24 @@ final class ClipStore: ObservableObject {
         isScanning = true
         statusMessage = "Scanning \(folder.path)…"
         Task.detached { [weak self] in
-            let files = Self.findVideoFiles(in: folder)
+            let files = Self.scanVideoFiles(in: folder)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 let existing = Dictionary(uniqueKeysWithValues: self.clips.map { ($0.url, $0) })
-                self.clips = files.map { url in
-                    let clip = existing[url] ?? Clip(url: url)
-                    clip.relativeName = url.path.hasPrefix(folder.path + "/")
-                        ? String(url.path.dropFirst(folder.path.count + 1))
-                        : url.lastPathComponent
+                self.clips = files.map { file in
+                    let clip = existing[file.url] ?? Clip(url: file.url, fileDate: file.fileDate)
+                    clip.relativeName = file.url.path.hasPrefix(folder.path + "/")
+                        ? String(file.url.path.dropFirst(folder.path.count + 1))
+                        : file.url.lastPathComponent
                     return clip
                 }
                 self.isScanning = false
                 self.statusMessage = "\(files.count) clip\(files.count == 1 ? "" : "s")"
-                if self.selectedClip == nil { self.selectedClip = self.clips.first }
+                if let selected = self.selectedClip {
+                    if !self.clips.contains(selected) { self.selectedClip = self.clips.first }
+                } else {
+                    self.selectedClip = self.clips.first
+                }
                 self.loadMetadata()
             }
         }

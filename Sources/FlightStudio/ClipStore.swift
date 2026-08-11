@@ -350,6 +350,21 @@ enum TimelineWaveformBuilder {
     }
 }
 
+enum MediaCacheFiles {
+    static let evictablePrefixes = ["preview-", "filmstrip-", "waveform-", "thumb-"]
+
+    static func isEvictable(_ url: URL) -> Bool {
+        guard !url.lastPathComponent.contains("-work-") else { return false }
+        evictablePrefixes.contains { url.lastPathComponent.hasPrefix($0) }
+    }
+
+    static func evictableFiles(in folder: URL) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+            .filter(isEvictable)
+    }
+}
+
 @MainActor
 final class ClipStore: ObservableObject {
     private static let lastFolderDefaultsKey = "lastSourceFolder"
@@ -662,6 +677,7 @@ final class ClipStore: ObservableObject {
                 }
             }
             if needsCacheFlush { try? MediaMetadataCache.shared.flush() }
+            Self.enforceCacheCap(keeping: nil)
         }
     }
 
@@ -709,7 +725,7 @@ final class ClipStore: ObservableObject {
 
     func refreshCacheSize() {
         Task.detached {
-            let bytes = Self.previewFiles().reduce(Int64(0)) { sum, url in
+            let bytes = Self.evictableCacheFiles().reduce(Int64(0)) { sum, url in
                 sum + (((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64) ?? 0)
             }
             await MainActor.run { [weak self] in self?.previewCacheBytes = bytes }
@@ -721,7 +737,7 @@ final class ClipStore: ObservableObject {
         filmstripTasks.removeAll()
         for entry in waveformTasks.values { entry.task.cancel() }
         waveformTasks.removeAll()
-        for url in Self.previewFiles() {
+        for url in Self.evictableCacheFiles() {
             try? FileManager.default.removeItem(at: url)
         }
         for clip in clips where clip.url.pathExtension.lowercased() == "ts" {
@@ -730,28 +746,24 @@ final class ClipStore: ObservableObject {
         for clip in clips { clip.timelineFilmstrip = nil }
         for clip in clips { clip.timelineWaveform = nil }
         refreshCacheSize()
-        statusMessage = "Preview cache cleared."
+        statusMessage = "Media cache cleared."
     }
 
-    nonisolated private static func previewFiles() -> [URL] {
-        ((try? FileManager.default.contentsOfDirectory(
-            at: cacheRoot, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
-            .filter {
-                $0.lastPathComponent.hasPrefix("preview-")
-                    || $0.lastPathComponent.hasPrefix("filmstrip-")
-                    || $0.lastPathComponent.hasPrefix("waveform-")
-            }
+    nonisolated private static func evictableCacheFiles(in folder: URL = cacheRoot) -> [URL] {
+        MediaCacheFiles.evictableFiles(in: folder)
     }
 
     /// Drop the oldest previews until the cache fits the cap, sparing `keep`.
-    nonisolated static func enforceCacheCap(keeping keep: URL?) {
-        var entries: [(url: URL, size: Int64, date: Date)] = previewFiles().compactMap { url in
+    nonisolated static func enforceCacheCap(keeping keep: URL?,
+                                            cap: Int64 = previewCacheCap,
+                                            in folder: URL = cacheRoot) {
+        var entries: [(url: URL, size: Int64, date: Date)] = evictableCacheFiles(in: folder).compactMap { url in
             guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path) else { return nil }
             return (url, attrs[.size] as? Int64 ?? 0, attrs[.modificationDate] as? Date ?? .distantPast)
         }
         var total = entries.reduce(Int64(0)) { $0 + $1.size }
         entries.sort { $0.date < $1.date }
-        for entry in entries where total > previewCacheCap {
+        for entry in entries where total > max(cap, 0) {
             if entry.url == keep { continue }
             try? FileManager.default.removeItem(at: entry.url)
             total -= entry.size

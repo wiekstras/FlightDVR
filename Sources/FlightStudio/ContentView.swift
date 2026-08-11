@@ -134,7 +134,7 @@ struct StatusBar: View {
                 Text(queue.currentMessage)
             }
             if store.previewCacheBytes > 0 {
-                Text("Previews: \(byteString(store.previewCacheBytes))")
+                Text("Media cache: \(byteString(store.previewCacheBytes))")
                 Button("Clear") { store.clearPreviewCache() }
                     .controlSize(.mini)
             }

@@ -227,6 +227,29 @@ enum ExportOutput {
     }
 }
 
+enum ExportTemporaryFiles {
+    static func belongsToJob(_ url: URL, jobID: UUID) -> Bool {
+        let id = jobID.uuidString
+        let name = url.lastPathComponent
+        return name.hasPrefix("title-\(id)-") || name.hasPrefix("2pass-\(id)-")
+    }
+
+    static func cleanup(jobID: UUID, in folder: URL = ClipStore.cacheRoot,
+                        fileManager: FileManager = .default) {
+        cleanup(jobIDs: [jobID], in: folder, fileManager: fileManager)
+    }
+
+    static func cleanup(jobIDs: Set<UUID>, in folder: URL = ClipStore.cacheRoot,
+                        fileManager: FileManager = .default) {
+        guard !jobIDs.isEmpty else { return }
+        let files = (try? fileManager.contentsOfDirectory(
+            at: folder, includingPropertiesForKeys: nil)) ?? []
+        for url in files where jobIDs.contains(where: { belongsToJob(url, jobID: $0) }) {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+}
+
 enum SequenceOrder {
     static func moved<T>(_ values: [T], from source: Int, to destination: Int) -> [T] {
         guard values.indices.contains(source), values.indices.contains(destination),
@@ -467,7 +490,9 @@ final class ExportQueue: ObservableObject {
     init(persistenceURL: URL = ExportQueueStore.defaultURL) {
         self.persistenceURL = persistenceURL
         do {
-            jobs = try ExportQueueStore.load(from: persistenceURL).compactMap { snapshot in
+            let snapshots = try ExportQueueStore.load(from: persistenceURL)
+            ExportTemporaryFiles.cleanup(jobIDs: Set(snapshots.map(\.id)))
+            jobs = snapshots.compactMap { snapshot in
                 guard !snapshot.clips.isEmpty else { return nil }
                 let clips = snapshot.clips.map { saved -> Clip in
                     let clip = Clip(url: saved.url, fileDate: Clip.readFileDate(for: saved.url),
@@ -706,6 +731,7 @@ final class ExportQueue: ObservableObject {
     }
 
     private func runJob(_ job: ExportJob) async throws {
+        defer { ExportTemporaryFiles.cleanup(jobID: job.id) }
         let snapshots = job.clips.map {
             ExportClipSnapshot(url: $0.url, info: $0.info, edit: $0.edit)
         }
@@ -744,13 +770,6 @@ final class ExportQueue: ObservableObject {
         let commands = ExportCommandBuilder.build(
             plan: plan, settings: settings, info: info,
             source: job.clip.url, output: job.stagingURL, jobID: job.id)
-        let titleAssetCount = plan.sanitized(duration: info.duration).titleOverlays.count
-        defer {
-            for index in 0..<titleAssetCount {
-                try? FileManager.default.removeItem(
-                    at: ExportCommandBuilder.titleAssetURL(jobID: job.id, index: index))
-            }
-        }
         let passes = Double(commands.count)
         for (index, args) in commands.enumerated() {
             let passBase = Double(index) / passes

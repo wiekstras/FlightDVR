@@ -138,6 +138,28 @@ enum SelfTest {
         guard ClipStore.mediaCacheKey(for: identityFile) != firstIdentity else {
             throw Failure("changed media did not invalidate its cached metadata")
         }
+        guard MediaCacheFiles.isEvictable(URL(fileURLWithPath: "/cache/thumb-a.jpg")),
+              MediaCacheFiles.isEvictable(URL(fileURLWithPath: "/cache/preview-a.mp4")),
+              !MediaCacheFiles.isEvictable(URL(fileURLWithPath: "/cache/filmstrip-work-a.jpg")),
+              !MediaCacheFiles.isEvictable(URL(fileURLWithPath: "/cache/title-a-0.png")) else {
+            throw Failure("media cache accounting included active work or missed durable previews")
+        }
+        let evictionFolder = workDir.appendingPathComponent("cache-eviction", isDirectory: true)
+        try FileManager.default.createDirectory(at: evictionFolder, withIntermediateDirectories: true)
+        let oldCache = evictionFolder.appendingPathComponent("thumb-old.jpg")
+        let newCache = evictionFolder.appendingPathComponent("preview-new.mp4")
+        let activeWork = evictionFolder.appendingPathComponent("filmstrip-work-active.jpg")
+        for url in [oldCache, newCache, activeWork] { try Data("1234".utf8).write(to: url) }
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)],
+                                              ofItemAtPath: oldCache.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 2)],
+                                              ofItemAtPath: newCache.path)
+        ClipStore.enforceCacheCap(keeping: nil, cap: 4, in: evictionFolder)
+        guard !FileManager.default.fileExists(atPath: oldCache.path),
+              FileManager.default.fileExists(atPath: newCache.path),
+              FileManager.default.fileExists(atPath: activeWork.path) else {
+            throw Failure("media cache eviction did not preserve active work or newest assets")
+        }
         print("durable media metadata cache ok")
 
         guard Probe.frameRate(from: "60000/1001").map({ abs($0 - 59.94) < 0.01 }) == true,
@@ -452,6 +474,23 @@ enum SelfTest {
               !FileManager.default.fileExists(atPath: staging.path) else {
             throw Failure("staged export was not promoted atomically")
         }
+        let temporaryFolder = workDir.appendingPathComponent("export-temporary", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryFolder,
+                                                withIntermediateDirectories: true)
+        let titleTemporary = temporaryFolder.appendingPathComponent(
+            "title-\(exportJobID.uuidString)-0.png")
+        let passTemporary = temporaryFolder.appendingPathComponent(
+            "2pass-\(exportJobID.uuidString)-0.log")
+        let unrelatedTemporary = temporaryFolder.appendingPathComponent("keep.log")
+        for url in [titleTemporary, passTemporary, unrelatedTemporary] {
+            try Data("temporary".utf8).write(to: url)
+        }
+        ExportTemporaryFiles.cleanup(jobID: exportJobID, in: temporaryFolder)
+        guard !FileManager.default.fileExists(atPath: titleTemporary.path),
+              !FileManager.default.fileExists(atPath: passTemporary.path),
+              FileManager.default.fileExists(atPath: unrelatedTemporary.path) else {
+            throw Failure("export temporary cleanup leaked job files or removed unrelated data")
+        }
         print("export queue recovery and atomic output promotion ok")
 
         var diskSettings = ExportSettings()
@@ -677,9 +716,11 @@ enum SelfTest {
         socialSettings.preset = .social
         socialSettings.socialTargetMB = 4
         let socialOut = workDir.appendingPathComponent("social.mp4")
+        let socialJobID = UUID()
+        defer { ExportTemporaryFiles.cleanup(jobID: socialJobID) }
         let socialCommands = ExportCommandBuilder.build(
             plan: plan, settings: socialSettings, info: info,
-            source: src, output: socialOut, jobID: UUID())
+            source: src, output: socialOut, jobID: socialJobID)
         guard socialCommands.count == 2 else { throw Failure("social preset should be two passes") }
         guard socialCommands[0].contains(where: { $0.contains("pad=1080:1920") }) else {
             throw Failure("social export did not apply the vertical delivery canvas")

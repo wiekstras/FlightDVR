@@ -76,6 +76,12 @@ enum SelfTest {
         guard info.hasAudio else { throw Failure("probe missed the audio stream") }
         print("probe ok: \(info.width)x\(info.height) \(info.videoCodec) \(info.duration)s range=\(info.colorRange ?? "?")")
 
+        guard Probe.frameRate(from: "60000/1001").map({ abs($0 - 59.94) < 0.01 }) == true,
+              Probe.frameRate(from: "0/0") == nil, Probe.frameRate(from: "bogus") == nil else {
+            throw Failure("frame-rate parsing mishandled ffprobe values")
+        }
+        print("frame-rate parsing ok")
+
         // 3. An edit that uses everything: trim 1–9, cut out 3–4, 2× ramp over 5–8, music under it.
         var plan = EditPlan()
         plan.inPoint = 1

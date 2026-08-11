@@ -199,6 +199,7 @@ struct ClipListView: View {
             HStack {
                 Button("All") { store.tickAll(true) }
                 Button("None") { store.tickAll(false) }
+                Button("Invert") { store.invertTicks() }
                 Spacer()
                 Text("\(store.tickedClips.count) ticked")
                     .foregroundStyle(.secondary)

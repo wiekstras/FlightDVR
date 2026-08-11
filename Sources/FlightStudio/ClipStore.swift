@@ -394,5 +394,10 @@ final class ClipStore: ObservableObject {
         objectWillChange.send()
     }
 
+    func invertTicks() {
+        for c in clips { c.ticked.toggle() }
+        objectWillChange.send()
+    }
+
     var tickedClips: [Clip] { clips.filter(\.ticked) }
 }

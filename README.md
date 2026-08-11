@@ -67,6 +67,8 @@ it, and add eased speed ramps.
 - **Recoverable publishing composer** — titles, captions, hashtags, visibility
   and platform choices are saved while typing, with live delivery preflight for
   canvas, codec, duration, frame rate, dimensions and API file-size limits.
+  Choose a JPEG/PNG YouTube thumbnail or generate a 1280×720 frame from the
+  completed export without leaving DVR Studio.
 - **Crash-safe exports** — queued export jobs survive relaunches, including
   their edit instructions and media metadata. Encoders write to private staging
   files, verify the result with ffprobe, and atomically promote it only after

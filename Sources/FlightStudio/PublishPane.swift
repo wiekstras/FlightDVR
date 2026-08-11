@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A compact publishing composer. It deliberately works against completed
 /// exports only, keeping encoding and upload work separate and recoverable.
@@ -9,6 +10,8 @@ struct PublishPane: View {
     @State private var selectedExportID: UUID?
     @State private var issues: [PublishIssue] = []
     @State private var draftSaveTask: Task<Void, Never>?
+    @State private var isGeneratingThumbnail = false
+    @State private var thumbnailError: String?
 
     init() {
         _draft = State(initialValue: PublishDraftStore.load())
@@ -43,6 +46,9 @@ struct PublishPane: View {
                             }
                         }
                         platformToggles
+                        if draft.platforms.contains(.youtube) {
+                            thumbnailEditor
+                        }
                         validationMessages
                         Button("Publish") { publish() }
                             .buttonStyle(.borderedProminent)
@@ -127,6 +133,69 @@ struct PublishPane: View {
                     .toggleStyle(.checkbox)
                 }
             }
+        }
+    }
+
+    private var thumbnailEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Eyebrow("YouTube Thumbnail")
+            if let url = draft.thumbnailURL, let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(maxWidth: 180, maxHeight: 102)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
+            }
+            HStack {
+                Button("Choose…") { chooseThumbnail() }
+                Button(isGeneratingThumbnail ? "Generating…" : "Use Middle Frame") {
+                    generateThumbnail()
+                }
+                .disabled(isGeneratingThumbnail || selectedExport == nil)
+                if draft.thumbnailURL != nil {
+                    Button("Clear") { draft.thumbnailURL = nil }
+                }
+            }
+            .controlSize(.small)
+            if let thumbnailError {
+                Text(thumbnailError).font(.caption2).foregroundStyle(.red)
+            }
+            Text("JPEG or PNG · maximum 2 MB")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func chooseThumbnail() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        draft.thumbnailURL = url
+        thumbnailError = nil
+    }
+
+    private func generateThumbnail() {
+        guard let export = selectedExport else { return }
+        let output = ClipStore.cacheRoot.appendingPathComponent(
+            "publish-thumbnail-\(export.id.uuidString).jpg")
+        let time = (export.outputInfo?.duration ?? 0) / 2
+        let command = PublishThumbnailBuilder.command(source: export.outputURL,
+                                                       time: time, output: output)
+        isGeneratingThumbnail = true
+        thumbnailError = nil
+        Task {
+            do {
+                try await Task.detached(priority: .userInitiated) {
+                    try FFmpeg.run(command)
+                }.value
+                draft.thumbnailURL = output
+            } catch {
+                thumbnailError = error.localizedDescription
+            }
+            isGeneratingThumbnail = false
+            refreshIssues()
         }
     }
 

@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 enum PublishingPlatform: String, CaseIterable, Identifiable, Codable, Hashable {
     case youtube = "YouTube"
@@ -29,6 +30,7 @@ struct PublishDraft: Codable, Equatable {
     var hashtags = ""
     var visibility: PublishVisibility = .privateOnly
     var platforms: Set<PublishingPlatform> = []
+    var thumbnailURL: URL?
 
     var fullCaption: String {
         [caption.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -116,6 +118,44 @@ enum PublishValidator {
         if draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             issues.append(PublishIssue(severity: .error, message: "Add a title before publishing."))
         }
+        if draft.platforms.contains(.youtube) {
+            if draft.title.count > 100 {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "YouTube titles cannot exceed 100 characters."))
+            }
+            if draft.title.contains("<") || draft.title.contains(">") {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "YouTube titles cannot contain < or >."))
+            }
+            if draft.fullCaption.lengthOfBytes(using: .utf8) > 5_000 {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "YouTube descriptions cannot exceed 5,000 bytes."))
+            }
+        }
+        if let thumbnail = draft.thumbnailURL {
+            if !draft.platforms.contains(.youtube) {
+                issues.append(PublishIssue(severity: .warning,
+                                           message: "The custom thumbnail is used by YouTube only."))
+            } else if !FileManager.default.fileExists(atPath: thumbnail.path) {
+                issues.append(PublishIssue(severity: .error,
+                                           message: "The custom thumbnail is missing."))
+            } else {
+                let ext = thumbnail.pathExtension.lowercased()
+                if !["jpg", "jpeg", "png"].contains(ext) {
+                    issues.append(PublishIssue(severity: .error,
+                                               message: "YouTube thumbnails must be JPEG or PNG."))
+                }
+                if NSImage(contentsOf: thumbnail) == nil {
+                    issues.append(PublishIssue(severity: .error,
+                                               message: "The custom thumbnail is not a readable image."))
+                }
+                let bytes = (try? thumbnail.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                if bytes > 2_000_000 {
+                    issues.append(PublishIssue(severity: .error,
+                                               message: "YouTube thumbnails cannot exceed 2 MB."))
+                }
+            }
+        }
         if settings.preset == .remux {
             issues.append(PublishIssue(severity: .error,
                                        message: "Remux exports are not delivery-safe; choose Master or Social."))
@@ -168,6 +208,16 @@ enum PublishValidator {
                                        message: "Instagram captions may be truncated above 2,200 characters."))
         }
         return issues
+    }
+}
+
+enum PublishThumbnailBuilder {
+    static func command(source: URL, time: Double, output: URL) -> [String] {
+        let seek = max(time.isFinite ? time : 0, 0)
+        return ["-y", "-ss", String(format: "%.3f", seek), "-i", source.path,
+                "-frames:v", "1", "-vf",
+                "scale=1280:720:force_original_aspect_ratio=decrease," +
+                "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black", "-q:v", "2", output.path]
     }
 }
 

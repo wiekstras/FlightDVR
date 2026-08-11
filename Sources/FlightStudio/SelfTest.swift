@@ -544,6 +544,8 @@ enum SelfTest {
         savedDraft.hashtags = "#fpv"
         savedDraft.visibility = .unlisted
         savedDraft.platforms = [.youtube, .instagram]
+        let thumbnailURL = waveformOut
+        savedDraft.thumbnailURL = thumbnailURL
         PublishDraftStore.save(savedDraft, defaults: publishDefaults, key: draftKey)
         guard PublishDraftStore.load(defaults: publishDefaults, key: draftKey) == savedDraft else {
             throw Failure("publish composer draft did not survive persistence")
@@ -553,6 +555,20 @@ enum SelfTest {
             throw Failure("corrupt publish composer draft did not recover safely")
         }
         print("publish composer draft recovery ok")
+
+        let thumbnailCommand = PublishThumbnailBuilder.command(
+            source: out, time: 2.5,
+            output: workDir.appendingPathComponent("generated-thumbnail.jpg"))
+        guard thumbnailCommand.contains("2.500"),
+              thumbnailCommand.contains(where: { $0.contains("scale=1280:720") }),
+              thumbnailCommand.last?.hasSuffix("generated-thumbnail.jpg") == true else {
+            throw Failure("publish thumbnail command did not build a 1280×720 frame")
+        }
+        try FFmpeg.run(thumbnailCommand)
+        guard let generatedThumbnail = thumbnailCommand.last.map({ URL(fileURLWithPath: $0) }),
+              NSImage(contentsOf: generatedThumbnail) != nil else {
+            throw Failure("publish thumbnail generation did not create a readable image")
+        }
 
         // 6. Social preset: two passes, lands near the target size.
         var socialSettings = ExportSettings()
@@ -671,6 +687,21 @@ enum SelfTest {
         guard PublishValidator.validate(draft: publishDraft, settings: invalidPublishSettings)
             .contains(where: { $0.severity == .error }) else {
             throw Failure("non-vertical TikTok publishing draft was accepted")
+        }
+        var invalidYouTubeDraft = PublishDraft()
+        invalidYouTubeDraft.title = String(repeating: "x", count: 101)
+        invalidYouTubeDraft.caption = String(repeating: "é", count: 2_501)
+        invalidYouTubeDraft.platforms = [.youtube]
+        let oversizedThumbnail = workDir.appendingPathComponent("oversized-thumbnail.jpg")
+        try Data(repeating: 0, count: 2_000_001).write(to: oversizedThumbnail)
+        invalidYouTubeDraft.thumbnailURL = oversizedThumbnail
+        let youtubeMetadataIssues = PublishValidator.validate(
+            draft: invalidYouTubeDraft, settings: socialSettings)
+        guard youtubeMetadataIssues.contains(where: { $0.message.contains("100 characters") }),
+              youtubeMetadataIssues.contains(where: { $0.message.contains("5,000 bytes") }),
+              youtubeMetadataIssues.contains(where: { $0.message.contains("2 MB") }),
+              youtubeMetadataIssues.contains(where: { $0.message.contains("not a readable image") }) else {
+            throw Failure("YouTube metadata or thumbnail constraints were not enforced")
         }
         print("publish validation ok")
         for c in socialCommands { try FFmpeg.run(c) }

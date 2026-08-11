@@ -140,15 +140,14 @@ final class ClipStore: ObservableObject {
             errorHandler: { _, _ in true }
         ) else { return [] }
         var found: [URL] = []
-        for case let url as URL in enumerator {
+        while let url = enumerator.nextObject() as? URL {
             if enumerator.level > maxDepth {
                 enumerator.skipDescendants()
                 continue
             }
-            if exts.contains(url.pathExtension.lowercased()) {
-                found.append(url)
-                if stopAtFirst { break }
-            }
+            guard exts.contains(url.pathExtension.lowercased()) else { continue }
+            found.append(url)
+            if stopAtFirst { break }
         }
         return found.sorted {
             $0.path.localizedStandardCompare($1.path) == .orderedAscending

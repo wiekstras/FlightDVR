@@ -437,13 +437,28 @@ enum SelfTest {
             throw Failure("social export did not apply the vertical delivery canvas")
         }
         socialSettings.socialFraming = .fill
+        socialSettings.cropPositionX = 0.25
+        socialSettings.cropPositionY = 0.75
         let fillCommands = ExportCommandBuilder.build(
             plan: plan, settings: socialSettings, info: info,
             source: src, output: socialOut, jobID: UUID())
         guard fillCommands[0].contains(where: {
             $0.contains("force_original_aspect_ratio=increase,crop=1080:1920")
+                && $0.contains("(iw-ow)*0.2500:(ih-oh)*0.7500")
         }) else {
-            throw Failure("fill framing did not crop to the vertical delivery canvas")
+            throw Failure("positioned fill framing did not crop to the requested canvas")
+        }
+        let encodedSettings = try JSONEncoder().encode(socialSettings)
+        guard var legacySettingsJSON = try JSONSerialization.jsonObject(with: encodedSettings) as? [String: Any] else {
+            throw Failure("could not construct legacy export settings fixture")
+        }
+        legacySettingsJSON.removeValue(forKey: "cropPositionX")
+        legacySettingsJSON.removeValue(forKey: "cropPositionY")
+        let decodedLegacySettings = try JSONDecoder().decode(
+            ExportSettings.self, from: JSONSerialization.data(withJSONObject: legacySettingsJSON))
+        guard decodedLegacySettings.cropPositionX == 0.5,
+              decodedLegacySettings.cropPositionY == 0.5 else {
+            throw Failure("legacy export settings did not default to a centered crop")
         }
         var publishDraft = PublishDraft()
         publishDraft.title = "Clean gap"

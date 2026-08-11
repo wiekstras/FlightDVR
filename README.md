@@ -45,7 +45,8 @@ it, and add eased speed ramps.
   works — not when ffmpeg merely claims to support it.
 - **Deliver** — Social exports can target TikTok, Instagram Reels, YouTube
   Shorts (9:16) or YouTube (16:9). Choose **Fit** to preserve the entire FPV
-  frame or **Fill** for an edge-to-edge social crop.
+  frame or **Fill** for an edge-to-edge social crop, then reposition the footage
+  visually in the live framing preview.
 - **Publish queue foundation** — validated multi-platform jobs are journaled to
   disk. Completed destinations survive relaunches, while interrupted uploads
   return as explicit retryable failures instead of disappearing.

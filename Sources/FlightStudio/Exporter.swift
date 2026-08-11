@@ -64,10 +64,14 @@ enum SocialProfile: String, CaseIterable, Identifiable, Codable {
 
     var canvasLabel: String { isVertical ? "1080 × 1920 · 9:16" : "1920 × 1080 · 16:9" }
     var isVertical: Bool { self != .youtube }
-    func videoFilter(framing: SocialFraming) -> String {
+    func videoFilter(framing: SocialFraming, positionX: Double = 0.5,
+                     positionY: Double = 0.5) -> String {
         let size = isVertical ? "1080:1920" : "1920:1080"
         if framing == .fill {
-            return "scale=\(size):force_original_aspect_ratio=increase,crop=\(size)"
+            let x = positionX.isFinite ? min(max(positionX, 0), 1) : 0.5
+            let y = positionY.isFinite ? min(max(positionY, 0), 1) : 0.5
+            return String(format: "scale=%@:force_original_aspect_ratio=increase,crop=%@:(iw-ow)*%.4f:(ih-oh)*%.4f",
+                          size, size, x, y)
         }
         if isVertical {
             return "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
@@ -90,9 +94,53 @@ struct ExportSettings: Codable, Equatable {
     var socialTargetMB: Double = 25
     var socialProfile: SocialProfile = .tiktok
     var socialFraming: SocialFraming = .fit
+    var cropPositionX: Double = 0.5
+    var cropPositionY: Double = 0.5
     var keepAudio = true
     var useHardware = false
     var outputFolder: URL?
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey {
+        case preset, colorMode, proResProfile, masterQuality, socialTargetMB
+        case socialProfile, socialFraming, cropPositionX, cropPositionY
+        case keepAudio, useHardware, outputFolder
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        preset = try values.decodeIfPresent(Preset.self, forKey: .preset) ?? .master
+        colorMode = try values.decodeIfPresent(ColorMode.self, forKey: .colorMode) ?? .fixRange
+        proResProfile = try values.decodeIfPresent(ProResProfile.self, forKey: .proResProfile) ?? .standard
+        masterQuality = try values.decodeIfPresent(MasterQuality.self, forKey: .masterQuality) ?? .high
+        socialTargetMB = try values.decodeIfPresent(Double.self, forKey: .socialTargetMB) ?? 25
+        socialProfile = try values.decodeIfPresent(SocialProfile.self, forKey: .socialProfile) ?? .tiktok
+        socialFraming = try values.decodeIfPresent(SocialFraming.self, forKey: .socialFraming) ?? .fit
+        let decodedX = try values.decodeIfPresent(Double.self, forKey: .cropPositionX) ?? 0.5
+        let decodedY = try values.decodeIfPresent(Double.self, forKey: .cropPositionY) ?? 0.5
+        cropPositionX = decodedX.isFinite ? min(max(decodedX, 0), 1) : 0.5
+        cropPositionY = decodedY.isFinite ? min(max(decodedY, 0), 1) : 0.5
+        keepAudio = try values.decodeIfPresent(Bool.self, forKey: .keepAudio) ?? true
+        useHardware = try values.decodeIfPresent(Bool.self, forKey: .useHardware) ?? false
+        outputFolder = try values.decodeIfPresent(URL.self, forKey: .outputFolder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(preset, forKey: .preset)
+        try values.encode(colorMode, forKey: .colorMode)
+        try values.encode(proResProfile, forKey: .proResProfile)
+        try values.encode(masterQuality, forKey: .masterQuality)
+        try values.encode(socialTargetMB, forKey: .socialTargetMB)
+        try values.encode(socialProfile, forKey: .socialProfile)
+        try values.encode(socialFraming, forKey: .socialFraming)
+        try values.encode(cropPositionX, forKey: .cropPositionX)
+        try values.encode(cropPositionY, forKey: .cropPositionY)
+        try values.encode(keepAudio, forKey: .keepAudio)
+        try values.encode(useHardware, forKey: .useHardware)
+        try values.encodeIfPresent(outputFolder, forKey: .outputFolder)
+    }
 
     var resolvedOutputFolder: URL {
         outputFolder ?? FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
@@ -598,7 +646,10 @@ enum ExportCommandBuilder {
                                              sourceHasAudio: settings.keepAudio && info.hasAudio,
                                              fixColorRange: fixRange,
                                              outputVideoFilter: settings.preset == .social
-                                                ? settings.socialProfile.videoFilter(framing: settings.socialFraming) : nil)
+                                                ? settings.socialProfile.videoFilter(
+                                                    framing: settings.socialFraming,
+                                                    positionX: settings.cropPositionX,
+                                                    positionY: settings.cropPositionY) : nil)
 
         var inputs: [String] = ["-i", src.path]
         if graph.needsMusicInput, let music = effectivePlan.music {

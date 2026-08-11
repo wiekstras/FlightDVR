@@ -55,6 +55,29 @@ struct ExportPane: View {
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                        SocialFramingPreview(
+                            image: store.selectedClip?.thumbnail,
+                            profile: settings.socialProfile,
+                            framing: settings.socialFraming,
+                            positionX: settings.cropPositionX,
+                            positionY: settings.cropPositionY)
+                            .frame(maxWidth: .infinity)
+                        if settings.socialFraming == .fill {
+                            LabeledContent("Horizontal") {
+                                Slider(value: $settings.cropPositionX, in: 0...1)
+                            }
+                            LabeledContent("Vertical") {
+                                Slider(value: $settings.cropPositionY, in: 0...1)
+                            }
+                            HStack {
+                                Spacer()
+                                Button("Center") {
+                                    settings.cropPositionX = 0.5
+                                    settings.cropPositionY = 0.5
+                                }
+                                .disabled(settings.cropPositionX == 0.5 && settings.cropPositionY == 0.5)
+                            }
+                        }
                         HStack {
                             Slider(value: $settings.socialTargetMB, in: 5...200, step: 5)
                             Text("\(Int(settings.socialTargetMB)) MB")
@@ -168,6 +191,54 @@ struct ExportPane: View {
             Eyebrow(label)
             content()
         }
+    }
+}
+
+private struct SocialFramingPreview: View {
+    let image: NSImage?
+    let profile: SocialProfile
+    let framing: SocialFraming
+    let positionX: Double
+    let positionY: Double
+
+    private var canvasSize: CGSize {
+        profile.isVertical ? CGSize(width: 108, height: 192) : CGSize(width: 224, height: 126)
+    }
+
+    var body: some View {
+        let canvas = canvasSize
+        ZStack {
+            Color.black
+            if let image, image.size.width > 0, image.size.height > 0 {
+                let imageAspect = image.size.width / image.size.height
+                let canvasAspect = canvas.width / canvas.height
+                let fill = framing == .fill
+                let renderedWidth = (fill ? imageAspect > canvasAspect : imageAspect < canvasAspect)
+                    ? canvas.height * imageAspect : canvas.width
+                let renderedHeight = renderedWidth / imageAspect
+                let overflowX = max(renderedWidth - canvas.width, 0)
+                let overflowY = max(renderedHeight - canvas.height, 0)
+                Image(nsImage: image)
+                    .resizable()
+                    .frame(width: renderedWidth, height: renderedHeight)
+                    .offset(x: overflowX * (0.5 - positionX),
+                            y: overflowY * (0.5 - positionY))
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: canvas.width, height: canvas.height)
+        .clipped()
+        .overlay(Rectangle().strokeBorder(.separator))
+        .overlay(alignment: .bottomTrailing) {
+            Text(profile.isVertical ? "9:16" : "16:9")
+                .font(.caption2.monospacedDigit())
+                .padding(4)
+                .background(.black.opacity(0.65))
+                .foregroundStyle(.white)
+        }
+        .accessibilityLabel("Social framing preview")
     }
 }
 

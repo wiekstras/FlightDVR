@@ -60,6 +60,8 @@ struct ContentView: View {
             if let i = args.firstIndex(of: "--open"), args.count > i + 1 {
                 store.sourceFolder = URL(fileURLWithPath: args[i + 1])
                 store.rescan()
+            } else {
+                store.restoreLastSourceFolder()
             }
         }
     }

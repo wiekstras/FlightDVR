@@ -73,6 +73,7 @@ enum SortOrder: String, CaseIterable, Identifiable {
 
 @MainActor
 final class ClipStore: ObservableObject {
+    private static let lastFolderDefaultsKey = "lastSourceFolder"
     @Published var sourceFolder: URL?
     @Published var clips: [Clip] = []
     @Published var selectedClip: Clip?
@@ -196,6 +197,7 @@ final class ClipStore: ObservableObject {
 
     func rescan() {
         guard let folder = sourceFolder else { return }
+        UserDefaults.standard.set(folder.path, forKey: Self.lastFolderDefaultsKey)
         isScanning = true
         statusMessage = "Scanning \(folder.path)…"
         Task.detached { [weak self] in
@@ -216,6 +218,15 @@ final class ClipStore: ObservableObject {
                 self.loadMetadata()
             }
         }
+    }
+
+    /// Reopen the last successfully chosen source when it is still mounted.
+    func restoreLastSourceFolder() {
+        guard sourceFolder == nil,
+              let path = UserDefaults.standard.string(forKey: Self.lastFolderDefaultsKey),
+              FileManager.default.fileExists(atPath: path) else { return }
+        sourceFolder = URL(fileURLWithPath: path, isDirectory: true)
+        rescan()
     }
 
     /// Probe + thumbnail every clip, at most four at a time — hundreds of

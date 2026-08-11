@@ -55,12 +55,32 @@ enum MasterQuality: String, CaseIterable, Identifiable {
     }
 }
 
+enum SocialProfile: String, CaseIterable, Identifiable {
+    case tiktok = "TikTok"
+    case instagramReel = "Instagram Reel"
+    case youtubeShort = "YouTube Short"
+    case youtube = "YouTube"
+    var id: String { rawValue }
+
+    var canvasLabel: String { isVertical ? "1080 × 1920 · 9:16" : "1920 × 1080 · 16:9" }
+    var isVertical: Bool { self != .youtube }
+    /// Letterbox/pillarbox rather than crop: an FPV frame must never lose a
+    /// gate or a prop simply to meet a platform canvas.
+    var videoFilter: String {
+        if isVertical {
+            return "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black"
+        }
+        return "scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black"
+    }
+}
+
 struct ExportSettings {
     var preset: Preset = .master
     var colorMode: ColorMode = .fixRange
     var proResProfile: ProResProfile = .standard
     var masterQuality: MasterQuality = .high
     var socialTargetMB: Double = 25
+    var socialProfile: SocialProfile = .tiktok
     var keepAudio = true
     var useHardware = false
     var outputFolder: URL?
@@ -111,15 +131,20 @@ final class ExportJob: ObservableObject, Identifiable {
         }
     }
     let id = UUID()
-    let clip: Clip
+    let clips: [Clip]
     let settings: ExportSettings
     let outputURL: URL
     @Published var state: State = .waiting
     @Published var progress: Double = 0      // 0…1
     nonisolated(unsafe) var cancelFlag = false
 
-    init(clip: Clip, settings: ExportSettings, outputURL: URL) {
-        self.clip = clip
+    var clip: Clip { clips[0] }
+    var isStitch: Bool { clips.count > 1 }
+    var displayName: String { isStitch ? "Sequence (\(clips.count) clips)" : clip.name }
+
+    init(clips: [Clip], settings: ExportSettings, outputURL: URL) {
+        precondition(!clips.isEmpty, "an export needs at least one clip")
+        self.clips = clips
         self.settings = settings
         self.outputURL = outputURL
     }
@@ -139,8 +164,25 @@ final class ExportQueue: ObservableObject {
             let out = OutputNamer.uniqueURL(in: folder, baseName: base,
                                              fileExtension: settings.preset.fileExtension,
                                              reserved: Set(jobs.map(\.outputURL)))
-            jobs.append(ExportJob(clip: clip, settings: settings, outputURL: out))
+            jobs.append(ExportJob(clips: [clip], settings: settings, outputURL: out))
         }
+    }
+
+    /// Join the selected clips in their current list order into one H.264
+    /// sequence. Stitching deliberately re-encodes, so differing source codecs
+    /// are fine; matching dimensions are required for a clean timeline.
+    func enqueueStitch(clips: [Clip], settings: ExportSettings) {
+        guard clips.count > 1 else { return }
+        let folder = settings.resolvedOutputFolder
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var stitchSettings = settings
+        if stitchSettings.preset == .remux || stitchSettings.preset == .social {
+            stitchSettings.preset = .master
+        }
+        let out = OutputNamer.uniqueURL(in: folder, baseName: "Flight sequence",
+                                        fileExtension: stitchSettings.preset.fileExtension,
+                                        reserved: Set(jobs.map(\.outputURL)))
+        jobs.append(ExportJob(clips: clips, settings: stitchSettings, outputURL: out))
     }
 
     func remove(_ job: ExportJob) {
@@ -201,7 +243,7 @@ final class ExportQueue: ObservableObject {
     private func runLoop() async {
         while let job = jobs.first(where: { $0.state == .waiting }) {
             job.state = .running
-            currentMessage = "Exporting \(job.clip.name)…"
+            currentMessage = "Exporting \(job.displayName)…"
             do {
                 try await runJob(job)
                 job.state = job.cancelFlag ? .cancelled : .done
@@ -220,6 +262,10 @@ final class ExportQueue: ObservableObject {
     }
 
     private func runJob(_ job: ExportJob) async throws {
+        if job.isStitch {
+            try await runStitchJob(job)
+            return
+        }
         guard let info = job.clip.info else {
             throw FFmpeg.ProcessError(command: "", stderr: "Clip was never probed — rescan and try again.")
         }
@@ -258,6 +304,22 @@ final class ExportQueue: ObservableObject {
         }
     }
 
+    private func runStitchJob(_ job: ExportJob) async throws {
+        let inputs = try job.clips.map { clip -> (URL, ClipInfo) in
+            guard let info = clip.info else {
+                throw FFmpeg.ProcessError(command: "", stderr: "\(clip.name) was never probed — rescan and try again.")
+            }
+            return (clip.url, info)
+        }
+        let totalDuration = max(inputs.reduce(0) { $0 + $1.1.duration }, 0.01)
+        let args = try StitchCommandBuilder.build(inputs: inputs, settings: job.settings, output: job.outputURL)
+        try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
+            try FFmpeg.run(args, onProgressSeconds: { seconds in
+                Task { @MainActor in cancel.progress = min(seconds / totalDuration, 1) }
+            }, isCancelled: { cancel.cancelFlag })
+        }.value
+    }
+
 }
 
 /// Turns a clip + edit plan + settings into complete ffmpeg invocations.
@@ -286,7 +348,9 @@ enum ExportCommandBuilder {
         let wantAudio = settings.keepAudio && (info.hasAudio || plan.music != nil)
         let graph = FilterGraphBuilder.build(plan: effectivePlan, duration: info.duration,
                                              sourceHasAudio: settings.keepAudio && info.hasAudio,
-                                             fixColorRange: fixRange)
+                                             fixColorRange: fixRange,
+                                             outputVideoFilter: settings.preset == .social
+                                                ? settings.socialProfile.videoFilter : nil)
 
         var inputs: [String] = ["-i", src.path]
         if graph.needsMusicInput, let music = effectivePlan.music {
@@ -341,6 +405,61 @@ enum ExportCommandBuilder {
         case .remux:
             fatalError("handled above")
         }
+    }
+}
+
+/// Builds a finished, shareable sequence from multiple DVR clips. This uses
+/// ffmpeg's concat filter rather than the concat demuxer, so input containers
+/// and codecs may differ; frame dimensions must match.
+enum StitchCommandBuilder {
+    static func build(inputs: [(URL, ClipInfo)], settings: ExportSettings, output: URL) throws -> [String] {
+        guard inputs.count > 1 else {
+            throw FFmpeg.ProcessError(command: "stitch", stderr: "Select at least two clips to stitch.")
+        }
+        guard let reference = inputs.first?.1 else { fatalError("checked above") }
+        guard inputs.allSatisfy({ $0.1.width == reference.width && $0.1.height == reference.height }) else {
+            throw FFmpeg.ProcessError(command: "stitch",
+                                      stderr: "All stitched clips must have the same resolution. Export them individually first if they differ.")
+        }
+
+        var args: [String] = ["-y"]
+        for (url, _) in inputs { args += ["-i", url.path] }
+        let videoInputs = inputs.indices.map { "[\($0):v]" }.joined()
+        let allHaveAudio = settings.keepAudio && inputs.allSatisfy { $0.1.hasAudio }
+        var graph = "\(videoInputs)concat=n=\(inputs.count):v=1:a=0[vcat]"
+        let videoOut: String
+        if settings.colorMode == .fixRange {
+            graph += ";[vcat]scale=in_range=pc:out_range=tv[vout]"
+            videoOut = "vout"
+        } else {
+            videoOut = "vcat"
+        }
+        if allHaveAudio {
+            let audioInputs = inputs.indices.map { "[\($0):a]" }.joined()
+            graph += ";\(audioInputs)concat=n=\(inputs.count):v=0:a=1[aout]"
+        }
+        args += ["-filter_complex", graph, "-map", "[\(videoOut)]"]
+        if allHaveAudio {
+            args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
+        } else {
+            args += ["-an"]
+        }
+        if settings.colorMode == .fixRange { args += ["-color_range", "tv"] }
+        switch settings.preset {
+        case .edit:
+            args += ["-c:v", "prores_ks", "-profile:v", settings.proResProfile.ffmpegProfile,
+                     "-vendor", "apl0", "-pix_fmt", "yuv422p10le"]
+        case .master, .social, .remux:
+            if settings.useHardware {
+                args += ["-c:v", "h264_videotoolbox", "-q:v", "65"]
+            } else {
+                args += ["-c:v", "libx264", "-preset", "slow",
+                         "-crf", String(settings.masterQuality.crf)]
+            }
+            args += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+        }
+        args.append(output.path)
+        return args
     }
 }
 

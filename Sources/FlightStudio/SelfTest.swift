@@ -130,7 +130,17 @@ enum SelfTest {
         }
         print("edit validation ok")
 
-        // 3d. Queued and on-disk name collisions receive predictable suffixes.
+        // 3d. Project sidecars preserve a full edit, including music settings.
+        let projectClip = Clip(url: src)
+        projectClip.edit = plan
+        let projectData = try EditProjectFile.encode(clip: projectClip)
+        let loadedPlan = try EditProjectFile.decode(projectData, for: projectClip)
+        guard loadedPlan == plan else {
+            throw Failure("edit project did not round-trip")
+        }
+        print("edit project ok")
+
+        // 3e. Queued and on-disk name collisions receive predictable suffixes.
         let exportFolder = workDir.appendingPathComponent("exports", isDirectory: true)
         let first = OutputNamer.uniqueURL(in: exportFolder, baseName: "flight", fileExtension: "mp4",
                                           fileExists: { _ in false })
@@ -144,7 +154,7 @@ enum SelfTest {
         }
         print("output naming ok")
 
-        // 3e. Source↔output time mapping must round-trip through cuts and ramps.
+        // 3f. Source↔output time mapping must round-trip through cuts and ramps.
         for t in stride(from: plan.inPoint, to: 9.0, by: 0.25) {
             // Cut interiors and their boundaries legitimately collapse to one output time.
             let inCut = plan.cuts.contains { t >= $0.start && t <= $0.end }
@@ -235,6 +245,16 @@ enum SelfTest {
         }
         print("remux ok: \(String(format: "%.2f", remuxInfo.duration))s hevc, no re-encode")
 
+        // 5b. Stitching builds one concat-filter export and keeps compatible audio.
+        let stitchOut = workDir.appendingPathComponent("stitched.mp4")
+        let stitchArgs = try StitchCommandBuilder.build(inputs: [(src, info), (src, info)],
+                                                         settings: settings, output: stitchOut)
+        guard stitchArgs.contains(where: { $0.contains("concat=n=2:v=1:a=0") }),
+              stitchArgs.contains("[aout]"), stitchArgs.contains(stitchOut.path) else {
+            throw Failure("stitch command did not build a concatenated A/V export")
+        }
+        print("stitch command ok")
+
         // 6. Social preset: two passes, lands near the target size.
         var socialSettings = ExportSettings()
         socialSettings.preset = .social
@@ -244,6 +264,9 @@ enum SelfTest {
             plan: plan, settings: socialSettings, info: info,
             source: src, output: socialOut, jobID: UUID())
         guard socialCommands.count == 2 else { throw Failure("social preset should be two passes") }
+        guard socialCommands[0].contains(where: { $0.contains("pad=1080:1920") }) else {
+            throw Failure("social export did not apply the vertical delivery canvas")
+        }
         for c in socialCommands { try FFmpeg.run(c) }
         let socialSize = (try FileManager.default.attributesOfItem(atPath: socialOut.path)[.size]) as? Int64 ?? 0
         let socialMB = Double(socialSize) / 1_000_000

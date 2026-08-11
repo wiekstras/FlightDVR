@@ -25,6 +25,7 @@ private struct TimelineEditor: View {
     @Binding var pendingCutStart: Double?
     @Binding var pendingSpeedStart: Double?
     @Binding var newZoneSpeed: Double
+    @State private var projectError: String?
 
     var duration: Double { clip.info?.duration ?? player.duration }
 
@@ -99,6 +100,11 @@ private struct TimelineEditor: View {
                 tool("Music") {
                     MusicControls(clip: clip)
                 }
+                benchDivider
+                tool("Project") {
+                    Button("Save…") { saveProject() }
+                    Button("Open…") { openProject() }
+                }
                 Spacer()
             }
             .padding(.horizontal, 16)
@@ -106,6 +112,14 @@ private struct TimelineEditor: View {
         }
         .onChange(of: clip.edit) { _, _ in
             player.editChanged()
+        }
+        .alert("Couldn’t use edit project", isPresented: Binding(
+            get: { projectError != nil },
+            set: { if !$0 { projectError = nil } }
+        )) {
+            Button("OK", role: .cancel) { projectError = nil }
+        } message: {
+            Text(projectError ?? "")
         }
     }
 
@@ -119,6 +133,30 @@ private struct TimelineEditor: View {
             Eyebrow(label)
             HStack(spacing: 6) { content() }
                 .benchButton()
+        }
+    }
+
+    private func saveProject() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = clip.url.deletingPathExtension().lastPathComponent + ".flightedit.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try EditProjectFile.encode(clip: clip).write(to: url, options: .atomic)
+        } catch {
+            projectError = error.localizedDescription
+        }
+    }
+
+    private func openProject() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            clip.edit = try EditProjectFile.decode(Data(contentsOf: url), for: clip)
+        } catch {
+            projectError = error.localizedDescription
         }
     }
 }

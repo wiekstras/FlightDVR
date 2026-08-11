@@ -39,6 +39,11 @@ struct ExportPane: View {
                             Toggle("Hardware encoder (VideoToolbox)", isOn: $settings.useHardware)
                         }
                     case .social:
+                        Picker("Platform", selection: $settings.socialProfile) {
+                            ForEach(SocialProfile.allCases) { profile in
+                                Text("\(profile.rawValue) · \(profile.canvasLabel)").tag(profile)
+                            }
+                        }
                         HStack {
                             Slider(value: $settings.socialTargetMB, in: 5...200, step: 5)
                             Text("\(Int(settings.socialTargetMB)) MB")
@@ -98,6 +103,15 @@ struct ExportPane: View {
                         .disabled(store.selectedClip == nil)
                     }
                     .controlSize(.small)
+                    Button("Stitch ticked into one video") {
+                        let ordered = store.sortedClips.filter(\.ticked)
+                        queue.enqueueStitch(clips: ordered, settings: settings)
+                    }
+                    .controlSize(.small)
+                    .disabled(store.tickedClips.count < 2)
+                    Text("Stitches in the current list order. Matching resolutions are required.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 Divider()

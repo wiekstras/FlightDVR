@@ -26,6 +26,8 @@ it, and add eased speed ramps.
     so speed changes flow instead of snapping
   - **music track** from any audio file, with volume, fade in/out, and a
     choice of mixing under the clip audio or replacing it
+  - **project files** — save an edit as a portable `.flightedit.json` sidecar
+    and reopen it later without copying the source footage
   - **Preview edit** — a toggle in the player plays the clip with cuts, ramps
     and music applied, via an AVComposition over the preview cache: instant,
     no encoding, and it follows every change live
@@ -39,6 +41,11 @@ it, and add eased speed ramps.
 
   Apple VideoToolbox hardware encoding is offered when a *test encode* proves it
   works — not when ffmpeg merely claims to support it.
+- **Deliver** — Social exports can target TikTok, Instagram Reels, YouTube
+  Shorts (9:16) or YouTube (16:9). Footage is padded to the destination canvas
+  instead of cropped, keeping the entire FPV frame intact.
+- **Stitch** — tick two or more compatible clips and create one continuous,
+  shareable sequence in the current list order.
 
 ## The colour fix
 
@@ -62,6 +69,18 @@ open "build/Flight Studio.app"
 
 Only Swift (Command Line Tools are enough — no Xcode needed) and ffmpeg are
 required.
+
+## Install without building
+
+Every push to `main` produces a macOS app archive under the repository's
+**Actions → Build Flight Studio → Artifacts**. Tagged versions (`v*`) are also
+attached to the corresponding GitHub Release. Download `Flight-Studio-macos.zip`,
+unzip it, and drag **Flight Studio.app** into Applications.
+
+The automated archive is ad-hoc signed but not notarized yet, so macOS may ask
+you to confirm it the first time it is opened. A developer signing certificate
+and notarization credentials can be added later as GitHub secrets without
+changing the application build.
 
 ## Verifying
 

@@ -1,14 +1,14 @@
 import Foundation
 
 /// A cut range removed from the middle of a clip.
-struct CutRange: Identifiable, Equatable {
+struct CutRange: Identifiable, Equatable, Codable {
     let id = UUID()
     var start: Double
     var end: Double
 }
 
 /// A zone played at a different speed, with eased ramps at both edges.
-struct SpeedZone: Identifiable, Equatable {
+struct SpeedZone: Identifiable, Equatable, Codable {
     let id = UUID()
     var start: Double
     var end: Double
@@ -16,7 +16,7 @@ struct SpeedZone: Identifiable, Equatable {
     var rampDuration: Double = 0.6
 }
 
-struct MusicTrack: Equatable {
+struct MusicTrack: Equatable, Codable {
     var url: URL
     var volume: Double = 0.8         // 0…1
     var fadeIn: Double = 1.0
@@ -25,7 +25,7 @@ struct MusicTrack: Equatable {
 }
 
 /// Everything the user has done to one clip.
-struct EditPlan: Equatable {
+struct EditPlan: Equatable, Codable {
     var inPoint: Double = 0
     var outPoint: Double? = nil      // nil = clip end
     var cuts: [CutRange] = []
@@ -240,7 +240,7 @@ enum FilterGraphBuilder {
     /// Build the -filter_complex for one clip's edit plan.
     /// Input 0 is the clip; input 1 (optional) is the music file.
     static func build(plan: EditPlan, duration: Double, sourceHasAudio: Bool,
-                      fixColorRange: Bool) -> Graph {
+                      fixColorRange: Bool, outputVideoFilter: String? = nil) -> Graph {
         let plan = plan.sanitized(duration: duration)
         let segs = plan.resolvedSegments(duration: duration)
         precondition(!segs.isEmpty, "empty edit")
@@ -275,6 +275,10 @@ enum FilterGraphBuilder {
             // most players treat as limited. Fix the range, touch nothing else.
             lines.append("[\(vOut)]scale=in_range=pc:out_range=tv[vfix]")
             vOut = "vfix"
+        }
+        if let outputVideoFilter {
+            lines.append("[\(vOut)]\(outputVideoFilter)[vdelivery]")
+            vOut = "vdelivery"
         }
 
         var aOut: String? = nil

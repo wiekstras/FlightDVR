@@ -92,6 +92,28 @@ enum TimelineMath {
     }
 }
 
+enum MarkerNavigation {
+    /// Ignore a marker at the current playhead so repeated navigation always
+    /// advances. Invalid legacy marker values are skipped defensively.
+    static func previous(in markers: [TimelineMarker], from time: Double,
+                         tolerance: Double = 0.001) -> Double? {
+        let current = time.isFinite ? time : 0
+        let epsilon = max(tolerance.isFinite ? tolerance : 0.001, 0)
+        return markers.lazy.map(\.time)
+            .filter { $0.isFinite && $0 < current - epsilon }
+            .max()
+    }
+
+    static func next(in markers: [TimelineMarker], from time: Double,
+                     tolerance: Double = 0.001) -> Double? {
+        let current = time.isFinite ? time : 0
+        let epsilon = max(tolerance.isFinite ? tolerance : 0.001, 0)
+        return markers.lazy.map(\.time)
+            .filter { $0.isFinite && $0 > current + epsilon }
+            .min()
+    }
+}
+
 /// Everything the user has done to one clip.
 struct EditPlan: Equatable, Codable {
     var inPoint: Double = 0

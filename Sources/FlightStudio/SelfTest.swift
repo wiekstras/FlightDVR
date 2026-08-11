@@ -310,6 +310,17 @@ enum SelfTest {
         guard marked.markers.map(\.time) == [1, 9], marked.markers[0].name == "Start" else {
             throw Failure("timeline markers were not sanitised")
         }
+        let navigationMarkers = [TimelineMarker(time: 8, name: "Third"),
+                                 TimelineMarker(time: 2, name: "First"),
+                                 TimelineMarker(time: 5, name: "Second"),
+                                 TimelineMarker(time: .nan, name: "Invalid")]
+        guard MarkerNavigation.previous(in: navigationMarkers, from: 5) == 2,
+              MarkerNavigation.next(in: navigationMarkers, from: 5) == 8,
+              MarkerNavigation.previous(in: navigationMarkers, from: 2) == nil,
+              MarkerNavigation.next(in: navigationMarkers, from: 8) == nil,
+              MarkerNavigation.next(in: navigationMarkers, from: 4) == 5 else {
+            throw Failure("marker traversal did not respect order or timeline boundaries")
+        }
         print("timeline markers ok")
 
         // 3g. Queued and on-disk name collisions receive predictable suffixes.

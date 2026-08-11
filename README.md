@@ -23,7 +23,8 @@ it, and add eased speed ramps.
   No VLC, no re-encode, instant after the first open.
 - **Navigate visually** — opening a recording lazily generates a cached timeline
   filmstrip and audio waveform, while unopened library items incur no extra
-  decoding work.
+  decoding work. Named event markers support one-click or ⌥←/⌥→ traversal for
+  quickly revisiting moments in long DVR sessions.
 - **Review quickly** — frame stepping, J/K/L navigation, selectable 0.25×–2×
   playback, native fullscreen, and fit/fill preview controls stay close at hand.
 - **Edit** — per clip:

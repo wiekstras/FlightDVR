@@ -174,6 +174,14 @@ private struct TimelineEditor: View {
                 }
                 benchDivider
                 tool("Marker") {
+                    Button {
+                        jumpToPreviousMarker()
+                    } label: {
+                        Image(systemName: "chevron.backward.2")
+                    }
+                    .keyboardShortcut(.leftArrow, modifiers: [.option])
+                    .disabled(previousMarkerTime == nil)
+                    .help("Previous marker (⌥←)")
                     Button("Add marker") {
                         let number = clip.edit.markers.count + 1
                         clip.edit.markers.append(TimelineMarker(
@@ -181,6 +189,14 @@ private struct TimelineEditor: View {
                     }
                     .keyboardShortcut("m", modifiers: [])
                     .help("Add marker (M)")
+                    Button {
+                        jumpToNextMarker()
+                    } label: {
+                        Image(systemName: "chevron.forward.2")
+                    }
+                    .keyboardShortcut(.rightArrow, modifiers: [.option])
+                    .disabled(nextMarkerTime == nil)
+                    .help("Next marker (⌥→)")
                 }
                 benchDivider
                 tool("Title") {
@@ -233,6 +249,24 @@ private struct TimelineEditor: View {
 
     private var benchDivider: some View {
         Divider().frame(height: 40).padding(.horizontal, 14)
+    }
+
+    private var previousMarkerTime: Double? {
+        MarkerNavigation.previous(in: clip.edit.markers, from: player.currentSourceTime)
+    }
+
+    private var nextMarkerTime: Double? {
+        MarkerNavigation.next(in: clip.edit.markers, from: player.currentSourceTime)
+    }
+
+    private func jumpToPreviousMarker() {
+        guard let time = previousMarkerTime else { return }
+        player.seekSource(to: time)
+    }
+
+    private func jumpToNextMarker() {
+        guard let time = nextMarkerTime else { return }
+        player.seekSource(to: time)
     }
 
     @ViewBuilder

@@ -57,7 +57,8 @@ it, and add eased speed ramps.
   then reposition the footage visually in the live framing preview.
 - **Publish queue foundation** — validated multi-platform jobs are journaled to
   disk. Completed destinations survive relaunches, while interrupted uploads
-  return as explicit retryable failures instead of disappearing.
+  return as explicit retryable failures instead of disappearing. One Publish
+  click starts every destination, and one failed platform can retry independently.
 - **Recoverable publishing composer** — titles, captions, hashtags, visibility
   and platform choices are saved while typing, with live delivery preflight.
 - **Crash-safe exports** — queued export jobs survive relaunches, including

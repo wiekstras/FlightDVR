@@ -477,6 +477,11 @@ enum SelfTest {
               recoveredPublish[0].progress[.tiktok] == 0.4 else {
             throw Failure("publishing queue journal did not recover platform state")
         }
+        guard PublishState.queued.canStart, PublishState.waitingForConnection.canStart,
+              PublishState.cancelled.canStart, PublishState.failed("offline").canStart,
+              !PublishState.uploading.canStart, !PublishState.uploaded.canStart else {
+            throw Failure("publishing retry eligibility did not preserve terminal destinations")
+        }
         print("publishing queue recovery ok")
 
         let publishSuiteName = "FlightStudio.PublishDraft.SelfTest.\(UUID().uuidString)"

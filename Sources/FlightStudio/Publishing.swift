@@ -160,6 +160,13 @@ enum PublishState: Equatable, Codable {
     case queued, waitingForConnection, uploading, uploaded, cancelled
     case failed(String)
 
+    var canStart: Bool {
+        switch self {
+        case .queued, .waitingForConnection, .cancelled, .failed: true
+        case .uploading, .uploaded: false
+        }
+    }
+
     private enum CodingKeys: String, CodingKey { case kind, message }
     private enum Kind: String, Codable {
         case queued, waitingForConnection, uploading, uploaded, cancelled, failed
@@ -213,6 +220,9 @@ final class PublishJob: ObservableObject, Identifiable {
         self.states = states ?? Dictionary(uniqueKeysWithValues: draft.platforms.map { ($0, .queued) })
         self.progress = progress
     }
+
+    var canStart: Bool { states.values.contains(where: \.canStart) }
+    var isComplete: Bool { !states.isEmpty && states.values.allSatisfy { $0 == .uploaded } }
 }
 
 struct PublishJobSnapshot: Codable, Equatable {
@@ -321,21 +331,44 @@ final class PublishQueue: ObservableObject {
     }
 
     func start(_ job: PublishJob) {
+        start(job, platforms: job.draft.platforms)
+    }
+
+    func startAll() {
+        for job in jobs where job.canStart { start(job) }
+    }
+
+    func retry(_ job: PublishJob, platform: PublishingPlatform) {
+        guard job.states[platform]?.canStart == true else { return }
+        job.progress[platform] = 0
+        job.states[platform] = .queued
+        persist()
+        start(job, platforms: [platform])
+    }
+
+    private func start(_ job: PublishJob, platforms: Set<PublishingPlatform>) {
         guard FileManager.default.fileExists(atPath: job.exportURL.path) else {
-            for platform in job.draft.platforms where job.states[platform] != .uploaded {
+            for platform in platforms where job.states[platform] != .uploaded {
                 job.states[platform] = .failed("Export file is missing.")
             }
             persist()
             return
         }
-        for platform in job.draft.platforms {
-            guard job.states[platform] != .uploaded, job.states[platform] != .uploading else { continue }
+        for platform in platforms {
+            guard job.states[platform]?.canStart == true else { continue }
             guard let provider = providers[platform] else { continue }
             let key = UploadKey(jobID: job.id, platform: platform)
+            guard uploadTasks[key] == nil else { continue }
             uploadTasks[key] = Task { [weak self, weak job] in
                 guard let self, let job else { return }
                 defer { uploadTasks[key] = nil }
-                switch await provider.connectionStatus() {
+                let connection = await provider.connectionStatus()
+                guard !Task.isCancelled else {
+                    job.states[platform] = .cancelled
+                    persist()
+                    return
+                }
+                switch connection {
                 case .connected:
                     job.states[platform] = .uploading
                     persist()

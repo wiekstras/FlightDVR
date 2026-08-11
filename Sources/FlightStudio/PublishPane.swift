@@ -44,7 +44,7 @@ struct PublishPane: View {
                         }
                         platformToggles
                         validationMessages
-                        Button("Queue publish") { queuePublish() }
+                        Button("Publish") { publish() }
                             .buttonStyle(.borderedProminent)
                             .disabled(selectedExport == nil || issues.contains(where: {
                                 $0.severity == .error
@@ -55,6 +55,14 @@ struct PublishPane: View {
                 if !publishQueue.jobs.isEmpty {
                     Divider()
                     section("Publishing queue") {
+                        HStack {
+                            Button("Resume all") { publishQueue.startAll() }
+                                .disabled(!publishQueue.jobs.contains(where: \.canStart))
+                            Spacer()
+                            Text("Uploads continue in the background")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                         ForEach(publishQueue.jobs) { job in
                             PublishJobRow(job: job)
                         }
@@ -136,9 +144,12 @@ struct PublishPane: View {
         }
     }
 
-    private func queuePublish() {
+    private func publish() {
         guard let selectedExport else { return }
         issues = publishQueue.enqueue(export: selectedExport, draft: draft)
+        guard !issues.contains(where: { $0.severity == .error }),
+              let job = publishQueue.jobs.last else { return }
+        publishQueue.start(job)
     }
 
     private func refreshIssues() {
@@ -177,6 +188,7 @@ private struct PublishJobRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Start publishing")
+                .disabled(!job.canStart)
                 Button {
                     queue.remove(job)
                 } label: {
@@ -199,6 +211,14 @@ private struct PublishJobRow: View {
                         }
                         .buttonStyle(.plain)
                         .help("Cancel \(platform.rawValue) upload")
+                    } else if state.canStart {
+                        Button {
+                            queue.retry(job, platform: platform)
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Retry \(platform.rawValue)")
                     }
                 }
             }

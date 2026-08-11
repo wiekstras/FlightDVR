@@ -22,6 +22,8 @@ it, and add eased speed ramps.
 - **Navigate visually** — opening a recording lazily generates a cached timeline
   filmstrip and audio waveform, while unopened library items incur no extra
   decoding work.
+- **Review quickly** — frame stepping, J/K/L navigation, selectable 0.25×–2×
+  playback, native fullscreen, and fit/fill preview controls stay close at hand.
 - **Edit** — per clip:
   - trim in/out points
   - frame-aware `HH:MM:SS:FF` source and output timecode, including multi-hour recordings

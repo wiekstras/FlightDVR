@@ -2,6 +2,20 @@ import SwiftUI
 import AVKit
 import Combine
 
+enum PreviewScaling: String, CaseIterable, Identifiable {
+    case fit = "Fit"
+    case fill = "Fill"
+    var id: String { rawValue }
+}
+
+enum PlaybackMath {
+    static let supportedRates = [0.25, 0.5, 1.0, 1.5, 2.0]
+    static func sanitizedRate(_ rate: Double) -> Double {
+        guard rate.isFinite else { return 1 }
+        supportedRates.min(by: { abs($0 - rate) < abs($1 - rate) }) ?? 1
+    }
+}
+
 @MainActor
 final class PlayerController: ObservableObject {
     let player = AVPlayer()
@@ -9,6 +23,7 @@ final class PlayerController: ObservableObject {
     @Published var duration: Double = 0          // duration of that item
     @Published var isReady = false
     @Published var previewingEdit = false        // playing the composition, not the raw clip
+    @Published private(set) var playbackRate = 1.0
     private var timeObserver: Any?
     private(set) weak var clip: Clip?
     private weak var store: ClipStore?
@@ -107,7 +122,18 @@ final class PlayerController: ObservableObject {
     }
 
     func togglePlay() {
-        if player.timeControlStatus == .playing { player.pause() } else { player.play() }
+        if player.timeControlStatus == .playing {
+            player.pause()
+        } else {
+            player.playImmediately(atRate: Float(playbackRate))
+        }
+    }
+
+    func setPlaybackRate(_ rate: Double) {
+        playbackRate = PlaybackMath.sanitizedRate(rate)
+        if player.timeControlStatus == .playing {
+            player.rate = Float(playbackRate)
+        }
     }
 
     /// Review controls operate in source time, so they stay intuitive whether
@@ -231,23 +257,28 @@ final class PlayerController: ObservableObject {
 /// SPM-built apps, so wrap AVPlayerView ourselves — sturdier and more capable.
 struct PlayerViewRepresentable: NSViewRepresentable {
     let player: AVPlayer
+    let scaling: PreviewScaling
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.player = player
         view.controlsStyle = .inline
         view.showsFullScreenToggleButton = true
+        view.videoGravity = scaling == .fit ? .resizeAspect : .resizeAspectFill
         return view
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
         if view.player !== player { view.player = player }
+        let gravity: AVLayerVideoGravity = scaling == .fit ? .resizeAspect : .resizeAspectFill
+        if view.videoGravity != gravity { view.videoGravity = gravity }
     }
 }
 
 struct PlayerPane: View {
     @ObservedObject var player: PlayerController
     @EnvironmentObject var store: ClipStore
+    @State private var scaling: PreviewScaling = .fit
 
     var body: some View {
         let clipInfo = store.selectedClip?.info
@@ -255,7 +286,7 @@ struct PlayerPane: View {
         let sourceDuration = clipInfo?.duration ?? player.duration
         VStack(spacing: 0) {
             ZStack {
-                PlayerViewRepresentable(player: player.player)
+                PlayerViewRepresentable(player: player.player, scaling: scaling)
                 if player.previewingEdit,
                    let title = store.selectedClip?.edit.sanitized(duration: sourceDuration).title,
                    title.isVisible(at: player.currentSourceTime) {
@@ -296,6 +327,7 @@ struct PlayerPane: View {
                 .buttonStyle(.borderless)
                 .keyboardShortcut("k", modifiers: [])
                 .help("Play or pause (K)")
+                .accessibilityLabel("Play or pause")
                 Button {
                     player.stepFrame(by: 1)
                 } label: {
@@ -318,6 +350,25 @@ struct PlayerPane: View {
                 Text("/ \(EditorTimecode.string(seconds: sourceDuration, fps: sourceFPS))")
                     .font(.system(size: 13).monospacedDigit())
                     .foregroundStyle(.tertiary)
+                Picker("Speed", selection: Binding(
+                    get: { player.playbackRate },
+                    set: { player.setPlaybackRate($0) }
+                )) {
+                    ForEach(PlaybackMath.supportedRates, id: \.self) { rate in
+                        Text("\(rate.formatted())×").tag(rate)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 72)
+                .help("Playback speed")
+                Picker("View", selection: $scaling) {
+                    ForEach(PreviewScaling.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 64)
+                .help("Fit the whole video or fill the preview")
                 Spacer()
                 if let clip = store.selectedClip, !clip.edit.isDefault, let info = clip.info {
                     HStack(spacing: 4) {

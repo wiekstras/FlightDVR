@@ -130,6 +130,14 @@ enum SelfTest {
         }
         print("timeline frame snapping ok")
 
+        guard PlaybackMath.sanitizedRate(.nan) == 1,
+              PlaybackMath.sanitizedRate(0.4) == 0.5,
+              PlaybackMath.sanitizedRate(1.8) == 2,
+              PlaybackMath.supportedRates == [0.25, 0.5, 1, 1.5, 2] else {
+            throw Failure("playback speed sanitisation selected an unsupported rate")
+        }
+        print("playback speed controls ok")
+
         // 3. An edit that uses everything: trim 1–9, cut out 3–4, 2× ramp over 5–8, music under it.
         var plan = EditPlan()
         plan.inPoint = 1

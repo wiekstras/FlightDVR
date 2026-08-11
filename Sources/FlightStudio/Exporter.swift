@@ -786,15 +786,20 @@ final class ExportQueue: ObservableObject {
     }
 
     private func runStitchJob(_ job: ExportJob) async throws {
-        let inputs = try job.clips.map { clip -> (URL, ClipInfo) in
+        let clips = try job.clips.map { clip -> ExportClipSnapshot in
             guard let info = clip.info else {
                 throw FFmpeg.ProcessError(command: "", stderr: "\(clip.name) was never probed — rescan and try again.")
             }
-            return (clip.url, info)
+            if let error = clip.edit.validationError(duration: info.duration) {
+                throw FFmpeg.ProcessError(command: "stitch", stderr: "\(clip.name): \(error)")
+            }
+            return ExportClipSnapshot(url: clip.url, info: info, edit: clip.edit)
         }
-        let totalDuration = max(inputs.reduce(0) { $0 + $1.1.duration }, 0.01)
-        let args = try StitchCommandBuilder.build(inputs: inputs, settings: job.settings,
-                                                  output: job.stagingURL)
+        let totalDuration = max(clips.reduce(0) {
+            $0 + $1.edit.outputDuration(duration: $1.info?.duration ?? 0)
+        }, 0.01)
+        let args = try StitchCommandBuilder.build(clips: clips, settings: job.settings,
+                                                  output: job.stagingURL, jobID: job.id)
         _ = try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
             try FFmpeg.run(args, onProgressSeconds: { seconds in
                 Task { @MainActor in
@@ -985,34 +990,94 @@ private enum TitleImageRenderer {
 /// ffmpeg's concat filter rather than the concat demuxer, so input containers
 /// and codecs may differ; frame dimensions must match.
 enum StitchCommandBuilder {
-    static func build(inputs: [(URL, ClipInfo)], settings: ExportSettings, output: URL) throws -> [String] {
-        guard inputs.count > 1 else {
+    static func build(clips: [ExportClipSnapshot], settings: ExportSettings,
+                      output: URL, jobID: UUID) throws -> [String] {
+        guard clips.count > 1 else {
             throw FFmpeg.ProcessError(command: "stitch", stderr: "Select at least two clips to stitch.")
         }
-        guard let reference = inputs.first?.1 else { fatalError("checked above") }
-        guard inputs.allSatisfy({ $0.1.width == reference.width && $0.1.height == reference.height }) else {
+        guard let reference = clips.first?.info else {
+            throw FFmpeg.ProcessError(command: "stitch", stderr: "Clip metadata is not ready.")
+        }
+        guard clips.allSatisfy({ $0.info?.width == reference.width && $0.info?.height == reference.height }) else {
             throw FFmpeg.ProcessError(command: "stitch",
                                       stderr: "All stitched clips must have the same resolution. Export them individually first if they differ.")
         }
 
         var args: [String] = ["-y"]
-        for (url, _) in inputs { args += ["-i", url.path] }
-        let videoInputs = inputs.indices.map { "[\($0):v]" }.joined()
-        let allHaveAudio = settings.keepAudio && inputs.allSatisfy { $0.1.hasAudio }
-        var graph = "\(videoInputs)concat=n=\(inputs.count):v=1:a=0[vcat]"
+        var graphs: [FilterGraphBuilder.Graph] = []
+        var nextInputIndex = 0
+        var titleAssetIndex = 0
+        for (clipIndex, clip) in clips.enumerated() {
+            guard let info = clip.info else {
+                throw FFmpeg.ProcessError(command: "stitch", stderr: "Clip metadata is not ready.")
+            }
+            let plan = clip.edit.sanitized(duration: info.duration)
+            let sourceInputIndex = nextInputIndex
+            args += ["-i", clip.url.path]
+            nextInputIndex += 1
+            var musicInputIndex = nextInputIndex
+            if let music = plan.music, settings.keepAudio {
+                args += ["-stream_loop", "-1", "-i", music.url.path]
+                musicInputIndex = nextInputIndex
+                nextInputIndex += 1
+            }
+            var titleInputIndices: [Int] = []
+            for title in plan.titleOverlays {
+                let url = ExportCommandBuilder.titleAssetURL(jobID: jobID, index: titleAssetIndex)
+                titleAssetIndex += 1
+                _ = TitleImageRenderer.write(title.text, canvasWidth: info.width,
+                                             canvasHeight: info.height, to: url)
+                titleInputIndices.append(nextInputIndex)
+                args += ["-loop", "1", "-i", url.path]
+                nextInputIndex += 1
+            }
+            var effectivePlan = plan
+            if !settings.keepAudio { effectivePlan.music = nil }
+            graphs.append(FilterGraphBuilder.build(
+                plan: effectivePlan, duration: info.duration,
+                sourceHasAudio: settings.keepAudio && info.hasAudio,
+                fixColorRange: false, titleInputIndices: titleInputIndices,
+                sourceInputIndex: sourceInputIndex, musicInputIndex: musicInputIndex,
+                labelPrefix: "s\(clipIndex)_"))
+        }
+        var graphLines = graphs.map(\.filterComplex)
+        var videoInputs: [String] = []
+        for (index, graph) in graphs.enumerated() {
+            let normalized = "s\(index)_vnorm"
+            graphLines.append("[\(graph.videoLabel)]settb=AVTB,setpts=PTS-STARTPTS,setsar=1[\(normalized)]")
+            videoInputs.append("[\(normalized)]")
+        }
+        graphLines.append("\(videoInputs.joined())concat=n=\(clips.count):v=1:a=0[vcat]")
         let videoOut: String
         if settings.colorMode == .fixRange {
-            graph += ";[vcat]scale=in_range=pc:out_range=tv[vout]"
+            graphLines.append("[vcat]scale=in_range=pc:out_range=tv[vout]")
             videoOut = "vout"
         } else {
             videoOut = "vcat"
         }
-        if allHaveAudio {
-            let audioInputs = inputs.indices.map { "[\($0):a]" }.joined()
-            graph += ";\(audioInputs)concat=n=\(inputs.count):v=0:a=1[aout]"
+        let wantsAudio = settings.keepAudio && graphs.contains { $0.audioLabel != nil }
+        if wantsAudio {
+            var audioInputs: [String] = []
+            for (index, graph) in graphs.enumerated() {
+                if let audio = graph.audioLabel {
+                    let normalized = "s\(index)_anorm"
+                    graphLines.append("[\(audio)]aformat=sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[\(normalized)]")
+                    audioInputs.append("[\(normalized)]")
+                } else {
+                    let duration = clips[index].edit.outputDuration(
+                        duration: clips[index].info?.duration ?? 0)
+                    let silence = "s\(index)_silence"
+                    graphLines.append(String(format:
+                        "anullsrc=r=48000:cl=stereo,atrim=0:%.4f,asetpts=PTS-STARTPTS[%@]",
+                        duration, silence))
+                    audioInputs.append("[\(silence)]")
+                }
+            }
+            graphLines.append("\(audioInputs.joined())concat=n=\(clips.count):v=0:a=1[aout]")
         }
-        args += ["-filter_complex", graph, "-map", "[\(videoOut)]"]
-        if allHaveAudio {
+        args += ["-filter_complex", graphLines.filter { !$0.isEmpty }.joined(separator: ";"),
+                 "-map", "[\(videoOut)]"]
+        if wantsAudio {
             args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
         } else {
             args += ["-an"]

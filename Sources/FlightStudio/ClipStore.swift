@@ -182,6 +182,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         let variant = Clip(url: clip.url, fileDate: clip.fileDate,
                            isLibraryBacked: false, editOverride: edit)
         variant.info = clip.info
+        variant.thumbnail = clip.thumbnail
         variant.relativeName = clip.relativeName
         return variant
     }

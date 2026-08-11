@@ -657,15 +657,32 @@ enum SelfTest {
         }
         print("remux ok: \(String(format: "%.2f", remuxInfo.duration))s hevc, no re-encode")
 
-        // 5b. Stitching builds one concat-filter export and keeps compatible audio.
+        // 5b. Stitching renders each frozen edit plan before concatenation. A
+        // sequence must never silently fall back to the raw source recordings.
         let stitchOut = workDir.appendingPathComponent("stitched.mp4")
-        let stitchArgs = try StitchCommandBuilder.build(inputs: [(src, info), (src, info)],
-                                                         settings: settings, output: stitchOut)
+        let stitchJobID = UUID()
+        defer { ExportTemporaryFiles.cleanup(jobID: stitchJobID) }
+        var silentInfo = info
+        silentInfo.hasAudio = false
+        var silentPlan = plan
+        silentPlan.music = nil
+        let stitchClips = [ExportClipSnapshot(url: src, info: info, edit: plan),
+                           ExportClipSnapshot(url: src, info: silentInfo, edit: silentPlan)]
+        let stitchArgs = try StitchCommandBuilder.build(clips: stitchClips,
+                                                         settings: settings, output: stitchOut,
+                                                         jobID: stitchJobID)
         guard stitchArgs.contains(where: { $0.contains("concat=n=2:v=1:a=0") }),
+              stitchArgs.contains(where: { $0.contains("[s0_v0]") && $0.contains("[s1_v0]") }),
+              stitchArgs.contains(where: { $0.contains("anullsrc=r=48000") }),
               stitchArgs.contains("[aout]"), stitchArgs.contains(stitchOut.path) else {
-            throw Failure("stitch command did not build a concatenated A/V export")
+            throw Failure("stitch command did not build edited, isolated A/V graphs")
         }
-        print("stitch command ok")
+        try FFmpeg.run(stitchArgs)
+        let stitchInfo = try Probe.probe(stitchOut)
+        guard abs(stitchInfo.duration - expected * 2) < 0.5, stitchInfo.hasAudio else {
+            throw Failure("stitch export ignored edits or lost audio: \(stitchInfo)")
+        }
+        print("edited stitch ok: \(String(format: "%.2f", stitchInfo.duration))s")
 
         // Publishing journals preserve completed destinations and turn a
         // process-interrupted upload into an explicit retryable failure.

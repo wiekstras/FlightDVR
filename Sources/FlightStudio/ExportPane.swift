@@ -5,7 +5,8 @@ struct ExportPane: View {
     @EnvironmentObject var queue: ExportQueue
     @State private var settings = ExportSettings()
     @State private var hardwareAvailable: Bool?
-    @State private var sequenceClips: [Clip] = []
+    @State private var sequenceClips: [SequenceEntry] = []
+    @State private var sequenceTitle = "Build Sequence"
     @State private var showingSequenceComposer = false
 
     var body: some View {
@@ -144,11 +145,25 @@ struct ExportPane: View {
                     }
                     .controlSize(.small)
                     Button("Build sequence…") {
-                        sequenceClips = store.sortedClips.filter(\.ticked)
+                        sequenceTitle = "Build Sequence"
+                        sequenceClips = store.sortedClips.filter(\.ticked).map {
+                            SequenceEntry(clip: $0, name: $0.name)
+                        }
                         showingSequenceComposer = true
                     }
                     .controlSize(.small)
                     .disabled(store.tickedClips.count < 2)
+                    Button("Build highlight reel…") {
+                        guard let clip = store.selectedClip else { return }
+                        sequenceTitle = "Build Highlight Reel"
+                        sequenceClips = clip.highlights.map { highlight in
+                            SequenceEntry(clip: Clip.exportVariant(from: clip, edit: highlight.edit),
+                                          name: highlight.name)
+                        }
+                        showingSequenceComposer = true
+                    }
+                    .controlSize(.small)
+                    .disabled((store.selectedClip?.highlights.count ?? 0) < 2)
                     Text("Arrange selected recordings before creating one continuous video.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -190,8 +205,9 @@ struct ExportPane: View {
             hardwareAvailable = await Task.detached { HardwareDetect.videoToolboxWorks() }.value
         }
         .sheet(isPresented: $showingSequenceComposer) {
-            SequenceComposer(clips: $sequenceClips, settings: settings) { ordered in
-                queue.enqueueStitch(clips: ordered, settings: settings)
+            SequenceComposer(clips: $sequenceClips, title: sequenceTitle,
+                             settings: settings) { ordered in
+                queue.enqueueStitch(clips: ordered.map(\.clip), settings: settings)
             }
         }
     }
@@ -213,30 +229,40 @@ struct ExportPane: View {
     }
 }
 
+private struct SequenceEntry: Identifiable {
+    let id = UUID()
+    let clip: Clip
+    let name: String
+}
+
 private struct SequenceComposer: View {
-    @Binding var clips: [Clip]
+    @Binding var clips: [SequenceEntry]
+    let title: String
     let settings: ExportSettings
-    let onQueue: ([Clip]) -> Void
+    let onQueue: ([SequenceEntry]) -> Void
     @Environment(\.dismiss) private var dismiss
 
     private var incompatible: Bool {
-        guard let reference = clips.first?.info else { return true }
+        guard let reference = clips.first?.clip.info else { return true }
         return clips.contains {
-            guard let info = $0.info else { return true }
+            guard let info = $0.clip.info else { return true }
             return info.width != reference.width || info.height != reference.height
         }
     }
 
     private var totalDuration: Double {
-        clips.reduce(0) { $0 + ($1.info?.duration ?? 0) }
+        clips.reduce(0) { total, entry in
+            guard let info = entry.clip.info else { return total }
+            return total + entry.clip.edit.outputDuration(duration: info.duration)
+        }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Build Sequence").font(.title2.weight(.semibold))
-                    Text("Drag recordings or use the arrows to set playback order.")
+                    Text(title).font(.title2.weight(.semibold))
+                    Text("Drag clips or use the arrows to set playback order.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -245,21 +271,22 @@ private struct SequenceComposer: View {
                     .foregroundStyle(.secondary)
             }
             List {
-                ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
+                ForEach(Array(clips.enumerated()), id: \.element.id) { index, entry in
                     HStack(spacing: 10) {
                         Text("\(index + 1)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.tertiary)
                             .frame(width: 20, alignment: .trailing)
-                        if let thumbnail = clip.thumbnail {
+                        if let thumbnail = entry.clip.thumbnail {
                             Image(nsImage: thumbnail)
                                 .resizable().aspectRatio(contentMode: .fill)
                                 .frame(width: 64, height: 36).clipped()
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(clip.name).lineLimit(1)
-                            if let info = clip.info {
-                                Text("\(info.width)×\(info.height) · \(EditorTimecode.string(seconds: info.duration, fps: 0))")
+                            Text(entry.name).lineLimit(1)
+                            if let info = entry.clip.info {
+                                let editedDuration = entry.clip.edit.outputDuration(duration: info.duration)
+                                Text("\(info.width)×\(info.height) · \(EditorTimecode.string(seconds: editedDuration, fps: 0))")
                                     .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                             } else {
                                 Text("Reading metadata…").font(.caption2).foregroundStyle(.orange)

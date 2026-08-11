@@ -51,7 +51,7 @@ it, and add eased speed ramps.
     made, so switching clips or relaunching the app does not lose work
   - **saved highlight shelf** — preserve and name several independent edits from
     one long DVR recording without copying or modifying the source file, then
-    add the whole shelf to the export queue in one click
+    export them individually or arrange them into one continuous highlight reel
   - **Preview edit** — a toggle in the player plays the clip with cuts, ramps
     and music applied, via an AVComposition over the preview cache: instant,
     no encoding, and it follows every change live
@@ -93,7 +93,10 @@ it, and add eased speed ramps.
   volume cannot hold the private staging file.
 - **Stitch** — tick two or more compatible clips and create one continuous,
   shareable sequence. A native sequence composer supports drag, arrow and remove
-  controls with duration and resolution checks before the job is queued.
+  controls with edited-duration and resolution checks before the job is queued.
+  Every clip's frozen trims, cuts, speed work, titles and audio mix are rendered
+  before concatenation; missing audio is padded with silence rather than dropping
+  sound from the entire sequence.
 
 ## The colour fix
 

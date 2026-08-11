@@ -397,7 +397,8 @@ enum FilterGraphBuilder {
     /// Input 0 is the clip; input 1 (optional) is the music file.
     static func build(plan: EditPlan, duration: Double, sourceHasAudio: Bool,
                       fixColorRange: Bool, outputVideoFilter: String? = nil,
-                      titleInputIndices: [Int] = []) -> Graph {
+                      titleInputIndices: [Int] = [], sourceInputIndex: Int = 0,
+                      musicInputIndex: Int = 1, labelPrefix: String = "") -> Graph {
         let plan = plan.sanitized(duration: duration)
         let segs = plan.resolvedSegments(duration: duration)
         precondition(!segs.isEmpty, "empty edit")
@@ -406,38 +407,41 @@ enum FilterGraphBuilder {
         var lines: [String] = []
         var vLabels: [String] = []
         var aLabels: [String] = []
+        let label = { (name: String) in "\(labelPrefix)\(name)" }
         let wantOriginalAudio = sourceHasAudio
             && !(plan.music?.muteOriginal ?? false)
             && !(plan.sourceAudio?.isMuted ?? false)
 
         for (i, seg) in segs.enumerated() {
-            let v = "v\(i)"
-            lines.append(String(format: "[0:v]trim=start=%.4f:end=%.4f,setpts=(PTS-STARTPTS)/%.5f[\(v)]",
+            let v = label("v\(i)")
+            lines.append(String(format: "[\(sourceInputIndex):v]trim=start=%.4f:end=%.4f,setpts=(PTS-STARTPTS)/%.5f[\(v)]",
                                 seg.start, seg.end, seg.speed))
             vLabels.append("[\(v)]")
             if wantOriginalAudio {
-                let a = "a\(i)"
-                lines.append(String(format: "[0:a]atrim=start=%.4f:end=%.4f,asetpts=PTS-STARTPTS,%@[\(a)]",
+                let a = label("a\(i)")
+                lines.append(String(format: "[\(sourceInputIndex):a]atrim=start=%.4f:end=%.4f,asetpts=PTS-STARTPTS,%@[\(a)]",
                                     seg.start, seg.end, atempoChain(seg.speed)))
                 aLabels.append("[\(a)]")
             }
         }
 
-        var vOut = "vcat"
+        var vOut = label("vcat")
         if segs.count == 1 {
             vOut = String(vLabels[0].dropFirst().dropLast())
         } else {
-            lines.append("\(vLabels.joined())concat=n=\(segs.count):v=1:a=0[vcat]")
+            lines.append("\(vLabels.joined())concat=n=\(segs.count):v=1:a=0[\(vOut)]")
         }
         if fixColorRange {
             // The one provably wrong thing about HDZero recordings: full-range video
             // most players treat as limited. Fix the range, touch nothing else.
-            lines.append("[\(vOut)]scale=in_range=pc:out_range=tv[vfix]")
-            vOut = "vfix"
+            let fixed = label("vfix")
+            lines.append("[\(vOut)]scale=in_range=pc:out_range=tv[\(fixed)]")
+            vOut = fixed
         }
         if let outputVideoFilter {
-            lines.append("[\(vOut)]\(outputVideoFilter)[vdelivery]")
-            vOut = "vdelivery"
+            let delivery = label("vdelivery")
+            lines.append("[\(vOut)]\(outputVideoFilter)[\(delivery)]")
+            vOut = delivery
         }
         for (index, pair) in zip(plan.titleOverlays, titleInputIndices).enumerated() {
             let (title, titleInputIndex) = pair
@@ -449,11 +453,11 @@ enum FilterGraphBuilder {
             case .center: y = "(H-h)/2"
             case .bottom: y = "H-h-H*0.08"
             }
-            let label = "vtitle\(index)"
+            let titleLabel = label("vtitle\(index)")
             lines.append(String(
                 format: "[%@][%d:v]overlay=x=(W-w)/2:y=%@:enable='between(t,%.4f,%.4f)':eof_action=repeat:shortest=1[%@]",
-                vOut, titleInputIndex, y, start, end, label))
-            vOut = label
+                vOut, titleInputIndex, y, start, end, titleLabel))
+            vOut = titleLabel
         }
 
         var aOut: String? = nil
@@ -461,8 +465,9 @@ enum FilterGraphBuilder {
             if aLabels.count == 1 {
                 aOut = String(aLabels[0].dropFirst().dropLast())
             } else {
-                lines.append("\(aLabels.joined())concat=n=\(aLabels.count):v=0:a=1[acat]")
-                aOut = "acat"
+                let concatenated = label("acat")
+                lines.append("\(aLabels.joined())concat=n=\(aLabels.count):v=0:a=1[\(concatenated)]")
+                aOut = concatenated
             }
             if let audio = plan.sourceAudio, !audio.isDefault, let existing = aOut {
                 let fadeIn = min(audio.fadeIn, outDur)
@@ -476,8 +481,9 @@ enum FilterGraphBuilder {
                     filters.append(String(format: "afade=t=out:st=%.3f:d=%.3f",
                                           fadeOutStart, fadeOut))
                 }
-                lines.append("[\(existing)]\(filters.joined(separator: ","))[asource]")
-                aOut = "asource"
+                let source = label("asource")
+                lines.append("[\(existing)]\(filters.joined(separator: ","))[\(source)]")
+                aOut = source
             }
         }
 
@@ -486,13 +492,14 @@ enum FilterGraphBuilder {
             needsMusic = true
             let fadeOutStart = max(0, outDur - music.fadeOut)
             lines.append(String(
-                format: "[1:a]atrim=0:%.3f,asetpts=PTS-STARTPTS,volume=%.3f,afade=t=in:d=%.2f,afade=t=out:st=%.3f:d=%.2f[music]",
+                format: "[\(musicInputIndex):a]atrim=0:%.3f,asetpts=PTS-STARTPTS,volume=%.3f,afade=t=in:d=%.2f,afade=t=out:st=%.3f:d=%.2f[\(label("music"))]",
                 outDur, music.volume, music.fadeIn, fadeOutStart, music.fadeOut))
             if let existing = aOut {
-                lines.append("[\(existing)][music]amix=inputs=2:duration=first:normalize=0[amix]")
-                aOut = "amix"
+                let mixed = label("amix")
+                lines.append("[\(existing)][\(label("music"))]amix=inputs=2:duration=first:normalize=0[\(mixed)]")
+                aOut = mixed
             } else {
-                aOut = "music"
+                aOut = label("music")
             }
         }
 

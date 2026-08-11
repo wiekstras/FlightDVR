@@ -159,6 +159,18 @@ enum SelfTest {
             TitleOverlay(text: "Lap: 100% 'fast'", start: 1.5, end: 2.5, position: .top),
             TitleOverlay(text: "Final push", start: 8.1, end: 8.8, position: .bottom)
         ]
+        var trimReset = plan
+        trimReset.markers = [TimelineMarker(time: 6, name: "Keep me")]
+        trimReset.resetTrim()
+        guard trimReset.inPoint == 0, trimReset.outPoint == nil,
+              trimReset.cuts == plan.cuts,
+              trimReset.speedZones == plan.speedZones,
+              trimReset.music == plan.music,
+              trimReset.sourceAudio == plan.sourceAudio,
+              trimReset.titleOverlays == plan.titleOverlays,
+              trimReset.markers.map(\.name) == ["Keep me"] else {
+            throw Failure("resetting trim discarded unrelated edit work")
+        }
 
         // 3a. Filename date parsing.
         let cal = Calendar.current

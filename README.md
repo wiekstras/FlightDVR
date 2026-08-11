@@ -29,6 +29,7 @@ it, and add eased speed ramps.
   playback, native fullscreen, and fit/fill preview controls stay close at hand.
 - **Edit** — per clip:
   - trim in/out points
+  - reset the trim independently without clearing cuts, titles, audio or markers
   - frame-aware `HH:MM:SS:FF` source and output timecode, including multi-hour recordings
   - **cut ranges out of the middle** (as many as you like)
   - **speed ramp zones** (0.25×–4×) with cosine-eased ramps at both edges,

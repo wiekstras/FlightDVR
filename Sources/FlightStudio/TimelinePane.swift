@@ -127,7 +127,8 @@ private struct TimelineEditor: View {
                     Button("Out") { clip.edit.outPoint = player.currentSourceTime }
                         .keyboardShortcut("o", modifiers: [])
                         .help("Set Out point (O)")
-                    Button("Reset") { clip.edit = EditPlan() }
+                    Button("Reset Trim") { clip.edit.resetTrim() }
+                        .help("Restore the full source range without clearing other edits")
                 }
                 benchDivider
                 tool("Cut") {

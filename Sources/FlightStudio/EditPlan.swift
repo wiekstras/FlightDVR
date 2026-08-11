@@ -158,6 +158,13 @@ struct EditPlan: Equatable, Codable {
         outPoint = min(duration, end)
     }
 
+    /// Restore the full source range without discarding cuts, markers, audio,
+    /// titles, or speed work that belongs to other editor tools.
+    mutating func resetTrim() {
+        inPoint = 0
+        outPoint = nil
+    }
+
     /// Returns a safe, deterministic version of an edit before it is rendered.
     /// Imported or manually edited projects can otherwise contain negative times,
     /// inverted ranges, or overlapping cuts that make ffmpeg reject the graph.

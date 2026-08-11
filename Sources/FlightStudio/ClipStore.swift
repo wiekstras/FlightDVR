@@ -80,26 +80,29 @@ final class ClipStore: ObservableObject {
     @Published var statusMessage = ""
     @Published var ffmpegMissing = !FFmpeg.isAvailable
     @Published var sortOrder: SortOrder = .date
+    @Published var reverseSort = false
     @Published var previewCacheBytes: Int64 = 0
 
     /// Clips in the chosen order. Date order = newest flight first.
     var sortedClips: [Clip] {
+        let ordered: [Clip]
         switch sortOrder {
         case .date:
-            clips.sorted { ($0.flightDate, $1.name) > ($1.flightDate, $0.name) }
+            ordered = clips.sorted { ($0.flightDate, $0.name) > ($1.flightDate, $1.name) }
         case .name:
-            clips.sorted { $0.relativeName.localizedStandardCompare($1.relativeName) == .orderedAscending }
+            ordered = clips.sorted { $0.relativeName.localizedStandardCompare($1.relativeName) == .orderedAscending }
         case .duration:
-            clips.sorted { ($0.info?.duration ?? 0) > ($1.info?.duration ?? 0) }
+            ordered = clips.sorted { ($0.info?.duration ?? 0) > ($1.info?.duration ?? 0) }
         case .size:
-            clips.sorted { ($0.info?.fileSize ?? 0) > ($1.info?.fileSize ?? 0) }
+            ordered = clips.sorted { ($0.info?.fileSize ?? 0) > ($1.info?.fileSize ?? 0) }
         }
+        return reverseSort ? Array(ordered.reversed()) : ordered
     }
 
     /// Clips grouped into one section per flying day (date order only).
     var daySections: [(day: Date, clips: [Clip])] {
         let grouped = Dictionary(grouping: sortedClips, by: \.flightDay)
-        return grouped.keys.sorted(by: >).map { ($0, grouped[$0]!) }
+        return grouped.keys.sorted(by: reverseSort ? < : >).map { ($0, grouped[$0]!) }
     }
 
     nonisolated static let cacheRoot: URL = {

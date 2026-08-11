@@ -184,7 +184,7 @@ struct ClipListView: View {
                 Button("Copy paths") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(
-                        selection.map(\.url.path).sorted().joined(separator: "\\n"),
+                        selection.map(\.url.path).sorted().joined(separator: "\n"),
                         forType: .string)
                 }
                 Divider()

@@ -104,6 +104,9 @@ enum SelfTest {
         guard Clip.parseDate(from: "hdz_047.ts") == nil else {
             throw Failure("parsed a date out of hdz_047.ts, which has none")
         }
+        guard Clip.parseDate(from: "hdz_20250231_120000.ts") == nil else {
+            throw Failure("accepted an impossible filename date")
+        }
         print("date parsing ok")
 
         // 3c. Invalid timeline data is normalised before it can reach ffmpeg.

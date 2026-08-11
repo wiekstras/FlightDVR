@@ -49,7 +49,14 @@ final class Clip: ObservableObject, Identifiable, Hashable {
            (0...23).contains(h), (0...59).contains(mi), (0...59).contains(s) {
             comps.hour = h; comps.minute = mi; comps.second = s
         }
-        return Calendar.current.date(from: comps)
+        guard let date = Calendar.current.date(from: comps) else { return nil }
+        // DateComponents normalises impossible dates (e.g. February 31) instead
+        // of rejecting them, which would silently put a clip in the wrong day.
+        let verified = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        guard verified.year == y, verified.month == mo, verified.day == d,
+              (comps.hour == nil || (verified.hour == comps.hour && verified.minute == comps.minute && verified.second == comps.second))
+        else { return nil }
+        return date
     }
 
     static func == (lhs: Clip, rhs: Clip) -> Bool { lhs.id == rhs.id }

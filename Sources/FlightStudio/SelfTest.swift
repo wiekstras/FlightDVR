@@ -321,6 +321,28 @@ enum SelfTest {
         }
         print("stitch command ok")
 
+        // Publishing journals preserve completed destinations and turn a
+        // process-interrupted upload into an explicit retryable failure.
+        var publishSettings = ExportSettings()
+        publishSettings.preset = .social
+        var publishDraft = PublishDraft()
+        publishDraft.title = "Recovery test"
+        publishDraft.platforms = [.youtube, .tiktok]
+        let publishSnapshot = PublishJobSnapshot(
+            id: UUID(), exportURL: stitchOut, settings: publishSettings, draft: publishDraft,
+            states: [.youtube: .uploaded, .tiktok: .uploading], progress: [.youtube: 1, .tiktok: 0.4])
+        let journalURL = workDir.appendingPathComponent("publish-queue.json")
+        try PublishQueueStore.save([publishSnapshot], to: journalURL)
+        let recoveredPublish = try PublishQueueStore.load(from: journalURL)
+        guard recoveredPublish.count == 1,
+              recoveredPublish[0].id == publishSnapshot.id,
+              recoveredPublish[0].states[.youtube] == .uploaded,
+              recoveredPublish[0].states[.tiktok] == .failed("Upload was interrupted. Retry when connected."),
+              recoveredPublish[0].progress[.tiktok] == 0.4 else {
+            throw Failure("publishing queue journal did not recover platform state")
+        }
+        print("publishing queue recovery ok")
+
         // 6. Social preset: two passes, lands near the target size.
         var socialSettings = ExportSettings()
         socialSettings.preset = .social

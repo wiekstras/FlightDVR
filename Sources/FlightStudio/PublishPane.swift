@@ -53,6 +53,11 @@ struct PublishPane: View {
                         }
                     }
                 }
+                if let persistenceError = publishQueue.persistenceError {
+                    Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
             .padding(14)
         }
@@ -141,7 +146,17 @@ private struct PublishJobRow: View {
                     Image(systemName: platform.icon).frame(width: 14)
                     Text(platform.rawValue).font(.caption)
                     Spacer()
-                    publishState(job.states[platform] ?? .queued, progress: job.progress[platform])
+                    let state = job.states[platform] ?? .queued
+                    publishState(state, progress: job.progress[platform])
+                    if state == .uploading {
+                        Button {
+                            queue.cancel(job, platform: platform)
+                        } label: {
+                            Image(systemName: "stop.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Cancel \(platform.rawValue) upload")
+                    }
                 }
             }
         }

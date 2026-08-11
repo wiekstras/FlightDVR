@@ -105,56 +105,195 @@ struct UnconfiguredPublishingProvider: PublishingProvider {
     }
 }
 
-@MainActor
-final class PublishJob: ObservableObject, Identifiable {
-    enum State: Equatable {
-        case queued, waitingForConnection, uploading, uploaded, cancelled
-        case failed(String)
+enum PublishState: Equatable, Codable {
+    case queued, waitingForConnection, uploading, uploaded, cancelled
+    case failed(String)
+
+    private enum CodingKeys: String, CodingKey { case kind, message }
+    private enum Kind: String, Codable {
+        case queued, waitingForConnection, uploading, uploaded, cancelled, failed
     }
 
-    let id = UUID()
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        switch try values.decode(Kind.self, forKey: .kind) {
+        case .queued: self = .queued
+        case .waitingForConnection: self = .waitingForConnection
+        case .uploading: self = .uploading
+        case .uploaded: self = .uploaded
+        case .cancelled: self = .cancelled
+        case .failed: self = .failed(try values.decode(String.self, forKey: .message))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .queued: try values.encode(Kind.queued, forKey: .kind)
+        case .waitingForConnection: try values.encode(Kind.waitingForConnection, forKey: .kind)
+        case .uploading: try values.encode(Kind.uploading, forKey: .kind)
+        case .uploaded: try values.encode(Kind.uploaded, forKey: .kind)
+        case .cancelled: try values.encode(Kind.cancelled, forKey: .kind)
+        case .failed(let message):
+            try values.encode(Kind.failed, forKey: .kind)
+            try values.encode(message, forKey: .message)
+        }
+    }
+}
+
+@MainActor
+final class PublishJob: ObservableObject, Identifiable {
+    typealias State = PublishState
+
+    let id: UUID
     let exportURL: URL
     let settings: ExportSettings
     let draft: PublishDraft
     @Published var states: [PublishingPlatform: State]
     @Published var progress: [PublishingPlatform: Double] = [:]
 
-    init(exportURL: URL, settings: ExportSettings, draft: PublishDraft) {
+    init(id: UUID = UUID(), exportURL: URL, settings: ExportSettings, draft: PublishDraft,
+         states: [PublishingPlatform: State]? = nil,
+         progress: [PublishingPlatform: Double] = [:]) {
+        self.id = id
         self.exportURL = exportURL
         self.settings = settings
         self.draft = draft
-        self.states = Dictionary(uniqueKeysWithValues: draft.platforms.map { ($0, .queued) })
+        self.states = states ?? Dictionary(uniqueKeysWithValues: draft.platforms.map { ($0, .queued) })
+        self.progress = progress
+    }
+}
+
+struct PublishJobSnapshot: Codable, Equatable {
+    var id: UUID
+    var exportURL: URL
+    var settings: ExportSettings
+    var draft: PublishDraft
+    var states: [PublishingPlatform: PublishState]
+    var progress: [PublishingPlatform: Double]
+
+    init(id: UUID, exportURL: URL, settings: ExportSettings, draft: PublishDraft,
+         states: [PublishingPlatform: PublishState],
+         progress: [PublishingPlatform: Double]) {
+        self.id = id
+        self.exportURL = exportURL
+        self.settings = settings
+        self.draft = draft
+        self.states = states
+        self.progress = progress
+    }
+
+    @MainActor init(job: PublishJob) {
+        id = job.id
+        exportURL = job.exportURL
+        settings = job.settings
+        draft = job.draft
+        states = job.states
+        progress = job.progress
+    }
+
+    /// A process cannot resume an arbitrary provider request. Preserve completed
+    /// destinations, but make an interrupted destination explicitly retryable.
+    func recoveringInterruptedUploads() -> PublishJobSnapshot {
+        var copy = self
+        for (platform, state) in copy.states where state == .uploading {
+            copy.states[platform] = .failed("Upload was interrupted. Retry when connected.")
+        }
+        return copy
+    }
+}
+
+enum PublishQueueStore {
+    static let defaultURL: URL = {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("FlightStudio", isDirectory: true)
+            .appendingPathComponent("publish-queue.json")
+    }()
+
+    static func load(from url: URL) throws -> [PublishJobSnapshot] {
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let data = try Data(contentsOf: url)
+        let snapshots = try JSONDecoder().decode([PublishJobSnapshot].self, from: data)
+        return snapshots.map { $0.recoveringInterruptedUploads() }
+    }
+
+    static func save(_ snapshots: [PublishJobSnapshot], to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(snapshots).write(to: url, options: .atomic)
     }
 }
 
 @MainActor
 final class PublishQueue: ObservableObject {
     @Published var jobs: [PublishJob] = []
+    @Published private(set) var persistenceError: String?
 
-    private let providers: [PublishingPlatform: any PublishingProvider] = Dictionary(
-        uniqueKeysWithValues: PublishingPlatform.allCases.map {
-            ($0, UnconfiguredPublishingProvider(platform: $0) as any PublishingProvider)
+    private let providers: [PublishingPlatform: any PublishingProvider]
+    private let persistenceURL: URL
+    private var saveWorkItem: DispatchWorkItem?
+    private struct UploadKey: Hashable {
+        let jobID: UUID
+        let platform: PublishingPlatform
+    }
+    private var uploadTasks: [UploadKey: Task<Void, Never>] = [:]
+
+    init(persistenceURL: URL = PublishQueueStore.defaultURL,
+         providers: [PublishingPlatform: any PublishingProvider]? = nil) {
+        self.persistenceURL = persistenceURL
+        self.providers = providers ?? Dictionary(
+            uniqueKeysWithValues: PublishingPlatform.allCases.map {
+                ($0, UnconfiguredPublishingProvider(platform: $0) as any PublishingProvider)
+            }
+        )
+        do {
+            jobs = try PublishQueueStore.load(from: persistenceURL).map {
+                PublishJob(id: $0.id, exportURL: $0.exportURL, settings: $0.settings,
+                           draft: $0.draft, states: $0.states, progress: $0.progress)
+            }
+        } catch {
+            jobs = []
+            persistenceError = "Publishing queue could not be restored: \(error.localizedDescription)"
         }
-    )
+    }
 
     func enqueue(export: ExportJob, draft: PublishDraft) -> [PublishIssue] {
         let issues = PublishValidator.validate(draft: draft, settings: export.settings)
         guard !issues.contains(where: { $0.severity == .error }) else { return issues }
         jobs.append(PublishJob(exportURL: export.outputURL, settings: export.settings, draft: draft))
+        persist()
         return issues
     }
 
     func start(_ job: PublishJob) {
+        guard FileManager.default.fileExists(atPath: job.exportURL.path) else {
+            for platform in job.draft.platforms where job.states[platform] != .uploaded {
+                job.states[platform] = .failed("Export file is missing.")
+            }
+            persist()
+            return
+        }
         for platform in job.draft.platforms {
+            guard job.states[platform] != .uploaded, job.states[platform] != .uploading else { continue }
             guard let provider = providers[platform] else { continue }
-            Task {
+            let key = UploadKey(jobID: job.id, platform: platform)
+            uploadTasks[key] = Task { [weak self, weak job] in
+                guard let self, let job else { return }
+                defer { uploadTasks[key] = nil }
                 switch await provider.connectionStatus() {
                 case .connected:
                     job.states[platform] = .uploading
+                    persist()
                     do {
                         try await provider.upload(file: job.exportURL, draft: job.draft) { progress in
-                            Task { @MainActor in job.progress[platform] = progress }
+                            Task { @MainActor in
+                                job.progress[platform] = min(max(progress, 0), 1)
+                                self.schedulePersistence()
+                            }
                         }
+                        try Task.checkCancellation()
                         job.progress[platform] = 1
                         job.states[platform] = .uploaded
                     } catch is CancellationError {
@@ -162,14 +301,48 @@ final class PublishQueue: ObservableObject {
                     } catch {
                         job.states[platform] = .failed(error.localizedDescription)
                     }
-                case .disconnected, .unavailable:
+                case .disconnected:
                     job.states[platform] = .waitingForConnection
+                case .unavailable(let reason):
+                    job.states[platform] = .failed(reason)
                 }
+                persist()
             }
         }
     }
 
+    func cancel(_ job: PublishJob, platform: PublishingPlatform) {
+        let key = UploadKey(jobID: job.id, platform: platform)
+        uploadTasks[key]?.cancel()
+        uploadTasks[key] = nil
+        guard job.states[platform] != .uploaded else { return }
+        job.states[platform] = .cancelled
+        persist()
+    }
+
     func remove(_ job: PublishJob) {
+        for platform in job.draft.platforms {
+            uploadTasks[UploadKey(jobID: job.id, platform: platform)]?.cancel()
+            uploadTasks[UploadKey(jobID: job.id, platform: platform)] = nil
+        }
         jobs.removeAll { $0.id == job.id }
+        persist()
+    }
+
+    private func schedulePersistence() {
+        saveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.persist() }
+        saveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: item)
+    }
+
+    private func persist() {
+        saveWorkItem?.cancel()
+        do {
+            try PublishQueueStore.save(jobs.map { PublishJobSnapshot(job: $0) }, to: persistenceURL)
+            persistenceError = nil
+        } catch {
+            persistenceError = "Publishing queue could not be saved: \(error.localizedDescription)"
+        }
     }
 }

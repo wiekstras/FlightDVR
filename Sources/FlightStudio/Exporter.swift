@@ -1,13 +1,13 @@
 import SwiftUI
 import Combine
 
-enum ColorMode: String, CaseIterable, Identifiable {
+enum ColorMode: String, CaseIterable, Identifiable, Codable {
     case fixRange = "Fix levels"
     case leaveAlone = "Leave colour alone"
     var id: String { rawValue }
 }
 
-enum Preset: String, CaseIterable, Identifiable {
+enum Preset: String, CaseIterable, Identifiable, Codable {
     case edit = "Edit (ProRes)"
     case master = "Master (H.264)"
     case social = "Social (target size)"
@@ -25,7 +25,7 @@ enum Preset: String, CaseIterable, Identifiable {
     var fileExtension: String { self == .edit ? "mov" : "mp4" }
 }
 
-enum ProResProfile: String, CaseIterable, Identifiable {
+enum ProResProfile: String, CaseIterable, Identifiable, Codable {
     case lt = "ProRes 422 LT"
     case standard = "ProRes 422"
     case hq = "ProRes 422 HQ"
@@ -39,7 +39,7 @@ enum ProResProfile: String, CaseIterable, Identifiable {
     }
 }
 
-enum MasterQuality: String, CaseIterable, Identifiable {
+enum MasterQuality: String, CaseIterable, Identifiable, Codable {
     case archive = "Archive"
     case high = "High"
     case good = "Good"
@@ -55,7 +55,7 @@ enum MasterQuality: String, CaseIterable, Identifiable {
     }
 }
 
-enum SocialProfile: String, CaseIterable, Identifiable {
+enum SocialProfile: String, CaseIterable, Identifiable, Codable {
     case tiktok = "TikTok"
     case instagramReel = "Instagram Reel"
     case youtubeShort = "YouTube Short"
@@ -76,13 +76,13 @@ enum SocialProfile: String, CaseIterable, Identifiable {
     }
 }
 
-enum SocialFraming: String, CaseIterable, Identifiable {
+enum SocialFraming: String, CaseIterable, Identifiable, Codable {
     case fit = "Fit entire frame"
     case fill = "Fill canvas"
     var id: String { rawValue }
 }
 
-struct ExportSettings {
+struct ExportSettings: Codable, Equatable {
     var preset: Preset = .master
     var colorMode: ColorMode = .fixRange
     var proResProfile: ProResProfile = .standard

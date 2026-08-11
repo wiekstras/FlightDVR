@@ -69,6 +69,18 @@ struct ContentView: View {
                 store.restoreLastSourceFolder()
             }
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            store.openImportedURLs(urls)
+        } isTargeted: { targeted in
+            if targeted {
+                store.statusMessage = "Drop to scan recordings"
+            } else if store.statusMessage == "Drop to scan recordings" {
+                store.statusMessage = "\(store.clips.count) clip\(store.clips.count == 1 ? "" : "s")"
+            }
+        }
+        .onOpenURL { url in
+            _ = store.openImportedURLs([url])
+        }
     }
 }
 

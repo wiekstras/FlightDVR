@@ -14,6 +14,8 @@ it, and add eased speed ramps.
   resolution/fps and size. Sort by **date** (grouped into one section per flying
   day — dates parsed out of filenames when present, file dates otherwise), name,
   length or size.
+  Finder folders and supported video files can also be dropped directly onto
+  the window or opened with DVR Studio.
 - **Manage** — move clips to the Trash (always recoverable, never hard-deleted)
   from the right-click menu, the Delete key, or Clips → Move Ticked to Trash.
 - **Preview natively** — `.ts` files are losslessly remuxed into a cache with the

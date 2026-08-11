@@ -101,6 +101,14 @@ enum SelfTest {
         }
         print("recursive scan ok: found nested clip at DCIM/100MEDIA")
 
+        guard ClipStore.importFolder(for: [src]) == workDir.standardizedFileURL,
+              ClipStore.importFolder(for: [nested]) == nested,
+              ClipStore.importFolder(for: [workDir.appendingPathComponent("notes.txt")]) == nil,
+              ClipStore.importFolder(for: [src, nestedClip]) == nil else {
+            throw Failure("Finder import routing accepted an unsupported or ambiguous drop")
+        }
+        print("Finder drag-and-drop routing ok")
+
         // 2. Probe it.
         let info = try Probe.probe(src)
         guard info.videoCodec == "hevc", info.width == 1280, abs(info.duration - 10) < 0.5 else {

@@ -431,6 +431,32 @@ final class ClipStore: ObservableObject {
         }
     }
 
+    /// Resolve Finder drops and Open With events to the narrowest library
+    /// folder DVR Studio can scan without copying or moving source footage.
+    @discardableResult
+    func openImportedURLs(_ urls: [URL]) -> Bool {
+        guard let folder = Self.importFolder(for: urls) else {
+            statusMessage = "Drop a video file or folder containing recordings."
+            return false
+        }
+        sourceFolder = folder
+        rescan()
+        return true
+    }
+
+    nonisolated static func importFolder(for urls: [URL]) -> URL? {
+        let standardized = urls.map(\.standardizedFileURL)
+        if let folder = standardized.first(where: {
+            (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }) {
+            return folder
+        }
+        let videos = standardized.filter { videoExtensions.contains($0.pathExtension.lowercased()) }
+        guard let first = videos.first else { return nil }
+        let parent = first.deletingLastPathComponent()
+        return videos.allSatisfy { $0.deletingLastPathComponent() == parent } ? parent : nil
+    }
+
     func rescan() {
         guard let folder = sourceFolder else { return }
         UserDefaults.standard.set(folder.path, forKey: Self.lastFolderDefaultsKey)

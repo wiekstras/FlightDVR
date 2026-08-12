@@ -372,7 +372,7 @@ enum ExportState: Equatable, Codable {
 final class ExportJob: ObservableObject, Identifiable {
     typealias State = ExportState
     let id: UUID
-    let clips: [Clip]
+    @Published private(set) var clips: [Clip]
     let settings: ExportSettings
     let outputURL: URL
     @Published var state: State = .waiting
@@ -406,6 +406,49 @@ final class ExportJob: ObservableObject, Identifiable {
         self.progress = progress
         self.outputInfo = outputInfo
         self.pendingPublishDraft = pendingPublishDraft
+    }
+
+    @discardableResult
+    func replaceSource(_ source: Clip, with replacement: Clip) -> Bool {
+        guard let index = clips.firstIndex(where: { $0 === source }) else { return false }
+        clips[index] = replacement
+        return true
+    }
+
+    var missingSources: [Clip] {
+        clips.filter { !FileManager.default.fileExists(atPath: $0.url.path) }
+    }
+}
+
+enum ExportSourceRelinker {
+    static func replacement(for source: Clip, url: URL, info: ClipInfo) throws -> Clip {
+        let replacementURL = url.standardizedFileURL
+        guard FileManager.default.fileExists(atPath: replacementURL.path) else {
+            throw FFmpeg.ProcessError(command: "relink export", stderr: "The selected recording is unavailable.")
+        }
+        guard ClipStore.videoExtensions.contains(replacementURL.pathExtension.lowercased()) else {
+            throw FFmpeg.ProcessError(command: "relink export", stderr: "Choose a supported video recording.")
+        }
+        if let expected = source.info {
+            let durationTolerance = max(expected.duration * 0.01, 0.5)
+            guard info.width == expected.width, info.height == expected.height,
+                  abs(info.duration - expected.duration) <= durationTolerance else {
+                throw FFmpeg.ProcessError(
+                    command: "relink export",
+                    stderr: "The selected video does not match the original recording's duration and resolution.")
+            }
+        }
+        if let error = source.edit.validationError(duration: info.duration) {
+            throw FFmpeg.ProcessError(
+                command: "relink export",
+                stderr: "The replacement does not contain the frozen edit: \(error)")
+        }
+        let replacement = Clip(
+            url: replacementURL, fileDate: Clip.readFileDate(for: replacementURL),
+            isLibraryBacked: false, editOverride: source.edit)
+        replacement.info = info
+        replacement.relativeName = replacementURL.lastPathComponent
+        return replacement
     }
 }
 
@@ -695,7 +738,7 @@ final class ExportQueue: ObservableObject {
     /// Put a cancelled or failed job back in the queue without making the user
     /// reselect its clip and export settings.
     func retry(_ job: ExportJob) {
-        guard job.state.canRetry else { return }
+        guard job.state.canRetry, job.missingSources.isEmpty else { return }
         job.cancelFlag = false
         job.progress = 0
         job.outputInfo = nil
@@ -703,6 +746,34 @@ final class ExportQueue: ObservableObject {
         try? FileManager.default.removeItem(at: job.stagingURL)
         objectWillChange.send()
         persist()
+    }
+
+    /// Replace a missing queued source without losing the edit frozen when the
+    /// job was created. Probe first so an unrelated or truncated recording can
+    /// never silently enter the export pipeline.
+    func relinkSource(_ source: Clip, in job: ExportJob, to replacementURL: URL) async {
+        guard job.state.canRetry, job.missingSources.contains(where: { $0 === source }) else { return }
+        do {
+            let info = try await Task.detached(priority: .userInitiated) {
+                try Probe.probe(replacementURL)
+            }.value
+            let replacement = try ExportSourceRelinker.replacement(
+                for: source, url: replacementURL, info: info)
+            guard job.replaceSource(source, with: replacement) else { return }
+            job.outputInfo = nil
+            job.progress = 0
+            if job.missingSources.isEmpty {
+                job.state = .waiting
+                persist()
+                start()
+            } else {
+                job.state = .failed("Relinked \(source.name). \(job.missingSources.count) source recording(s) still missing.")
+                persist()
+            }
+        } catch {
+            job.state = .failed("Could not relink \(source.name): \(error.localizedDescription)")
+            persist()
+        }
     }
 
     /// Move a waiting export relative to the other waiting jobs. Completed and

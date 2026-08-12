@@ -143,6 +143,43 @@ enum SelfTest {
         guard info.hasAudio else { throw Failure("probe missed the audio stream") }
         print("probe ok: \(info.width)x\(info.height) \(info.videoCodec) \(info.duration)s range=\(info.colorRange ?? "?")")
 
+        let missingSource = workDir.appendingPathComponent("moved-recording.ts")
+        var frozenEdit = EditPlan()
+        frozenEdit.inPoint = 1
+        frozenEdit.outPoint = 8
+        let missingClip = Clip(url: missingSource, fileDate: Date(),
+                               isLibraryBacked: false, editOverride: frozenEdit)
+        missingClip.info = info
+        let relinkedClip = try ExportSourceRelinker.replacement(for: missingClip, url: src, info: info)
+        guard relinkedClip.url == src.standardizedFileURL,
+              relinkedClip.info == info, relinkedClip.edit == frozenEdit else {
+            throw Failure("queued export relinking did not preserve its frozen edit and replacement metadata")
+        }
+        let relinkJob = ExportJob(
+            clips: [missingClip], settings: ExportSettings(),
+            outputURL: workDir.appendingPathComponent("relinked-export.mp4"),
+            state: .failed("Source missing"))
+        guard relinkJob.missingSources.count == 1,
+              relinkJob.replaceSource(missingClip, with: relinkedClip),
+              relinkJob.missingSources.isEmpty,
+              ExportJobSnapshot(job: relinkJob).clips.first?.url == src.standardizedFileURL else {
+            throw Failure("relinked queue source did not persist into the durable job snapshot")
+        }
+        var mismatchedInfo = info
+        mismatchedInfo.width += 1
+        guard (try? ExportSourceRelinker.replacement(
+            for: missingClip, url: src, info: mismatchedInfo)) == nil else {
+            throw Failure("queued export relinking accepted a different source recording")
+        }
+        var outsideReplacementEdit = frozenEdit
+        outsideReplacementEdit.outPoint = info.duration + 10
+        let invalidMissingClip = Clip(url: missingSource, fileDate: Date(),
+                                      isLibraryBacked: false, editOverride: outsideReplacementEdit)
+        guard (try? ExportSourceRelinker.replacement(for: invalidMissingClip, url: src, info: info)) == nil else {
+            throw Failure("queued export relinking accepted media shorter than its frozen edit")
+        }
+        print("queued export source relinking ok")
+
         let metadataJournal = workDir.appendingPathComponent("metadata-cache-test.json")
         try? FileManager.default.removeItem(at: metadataJournal)
         let metadataCache = MediaMetadataCache(url: metadataJournal)

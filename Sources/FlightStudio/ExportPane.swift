@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ExportPane: View {
     @EnvironmentObject var store: ClipStore
@@ -535,13 +536,24 @@ struct QueueRow: View {
                             .help("The completed export is missing or no longer verified")
                     }
                 case .cancelled, .failed:
+                    if !job.missingSources.isEmpty {
+                        Button {
+                            relinkFirstMissingSource()
+                        } label: {
+                            Image(systemName: "link.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Locate missing source recording")
+                    }
                     Button {
                         queue.retry(job)
                     } label: {
                         Image(systemName: "arrow.counterclockwise.circle")
                     }
                     .buttonStyle(.plain)
-                    .help("Retry export")
+                    .disabled(!job.missingSources.isEmpty)
+                    .help(job.missingSources.isEmpty
+                          ? "Retry export" : "Relink missing source recordings before retrying")
                 }
             }
             if job.state == .running {
@@ -562,6 +574,19 @@ struct QueueRow: View {
         }
         .padding(.vertical, 5)
         .overlay(alignment: .bottom) { Divider().opacity(0.5) }
+    }
+
+    private func relinkFirstMissingSource() {
+        guard let source = job.missingSources.first else { return }
+        let panel = NSOpenPanel()
+        panel.message = "Locate \(source.name) for this queued export. The frozen edit will be preserved."
+        panel.prompt = "Relink Recording"
+        panel.allowedContentTypes = ClipStore.videoExtensions.compactMap {
+            UTType(filenameExtension: $0)
+        }
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let replacementURL = panel.url else { return }
+        Task { await queue.relinkSource(source, in: job, to: replacementURL) }
     }
 
     @ViewBuilder private var stateIcon: some View {

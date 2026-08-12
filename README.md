@@ -108,6 +108,8 @@ it, and add eased speed ramps.
   cannot alter an already queued deliverable. Encoders write to private staging
   files, verify the result with ffprobe, and atomically promote it only after
   completion, protecting new and replaced exports from partial-file corruption.
+  If a queued source was moved or renamed, locate the replacement directly from
+  the failed job; DVR Studio probes it, validates the frozen edit, and resumes.
   Job-scoped title assets and two-pass encoder logs are removed after success,
   failure, cancellation, or crash recovery.
   Preset-aware disk preflight rejects jobs before encoding when the destination

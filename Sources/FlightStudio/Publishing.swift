@@ -371,18 +371,16 @@ enum PublishQueueStore {
     }()
 
     static func load(from url: URL) throws -> [PublishJobSnapshot] {
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let data = try Data(contentsOf: url)
-        let snapshots = try JSONDecoder().decode([PublishJobSnapshot].self, from: data)
-        return snapshots.map { $0.recoveringInterruptedUploads() }
+        let snapshots = try DurableQueueJournal.load(from: url) {
+            try JSONDecoder().decode([PublishJobSnapshot].self, from: $0)
+        }
+        return (snapshots ?? []).map { $0.recoveringInterruptedUploads() }
     }
 
     static func save(_ snapshots: [PublishJobSnapshot], to url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(snapshots).write(to: url, options: .atomic)
+        try DurableQueueJournal.save(encoder.encode(snapshots), to: url)
     }
 }
 

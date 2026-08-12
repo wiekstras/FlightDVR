@@ -596,7 +596,18 @@ enum SelfTest {
               recoveredExports[0].progress == 0 else {
             throw Failure("export queue journal did not recover an interrupted encode")
         }
+        try Data("corrupt export journal".utf8).write(to: exportJournalURL)
+        let backupRecoveredExports = try ExportQueueStore.load(from: exportJournalURL)
+        guard backupRecoveredExports == recoveredExports else {
+            throw Failure("export queue backup did not recover the complete job")
+        }
+        try FileManager.default.removeItem(at: DurableQueueJournal.backupURL(for: exportJournalURL))
+        guard try ExportQueueStore.load(from: exportJournalURL) == recoveredExports else {
+            throw Failure("export queue backup recovery did not repair its primary journal")
+        }
         let corruptExportJournal = workDir.appendingPathComponent("corrupt-export-queue.json")
+        try? FileManager.default.removeItem(
+            at: DurableQueueJournal.backupURL(for: corruptExportJournal))
         try Data(#"{"version":99,"jobs":[]}"#.utf8).write(to: corruptExportJournal)
         var rejectedUnknownJournal = false
         do {
@@ -880,6 +891,15 @@ enum SelfTest {
               recoveredPublish[0].states[.tiktok] == .failed("Upload was interrupted. Retry when connected."),
               recoveredPublish[0].progress[.tiktok] == 0.4 else {
             throw Failure("publishing queue journal did not recover platform state")
+        }
+        try Data("corrupt publish journal".utf8).write(to: journalURL)
+        let backupRecoveredPublish = try PublishQueueStore.load(from: journalURL)
+        guard backupRecoveredPublish == recoveredPublish else {
+            throw Failure("publishing backup lost partial multi-platform state")
+        }
+        try FileManager.default.removeItem(at: DurableQueueJournal.backupURL(for: journalURL))
+        guard try PublishQueueStore.load(from: journalURL) == recoveredPublish else {
+            throw Failure("publishing backup recovery did not repair its primary journal")
         }
         guard PublishState.queued.canStart, PublishState.waitingForConnection.canStart,
               PublishState.cancelled.canStart, PublishState.failed("offline").canStart,

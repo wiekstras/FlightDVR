@@ -87,6 +87,9 @@ it, and add eased speed ramps.
   click starts every destination, and one failed platform can retry independently.
   Each retry has a unique attempt identity, preventing a cancelled provider's
   late progress or completion callback from corrupting the newer upload state.
+  Export and publishing journals each maintain an atomic sibling backup; a
+  malformed primary is decoded from backup and repaired before any queued,
+  completed, or partially uploaded destination can disappear.
 - **Export & Publish handoff** — the current edit can be queued for social
   delivery in one action. DVR Studio freezes that edit, encodes and verifies it,
   then durably hands it to the publishing queue without blocking further edits;

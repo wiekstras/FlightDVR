@@ -464,6 +464,40 @@ private struct ExportQueueJournal: Codable {
     var jobs: [ExportJobSnapshot]
 }
 
+enum DurableQueueJournal {
+    static func backupURL(for url: URL) -> URL {
+        url.appendingPathExtension("backup")
+    }
+
+    static func load<Value>(from url: URL,
+                            decode: (Data) throws -> Value) throws -> Value? {
+        let fileManager = FileManager.default
+        let backup = backupURL(for: url)
+        guard fileManager.fileExists(atPath: url.path)
+                || fileManager.fileExists(atPath: backup.path) else { return nil }
+        if fileManager.fileExists(atPath: url.path) {
+            do {
+                return try decode(Data(contentsOf: url))
+            } catch {
+                guard fileManager.fileExists(atPath: backup.path) else { throw error }
+            }
+        }
+        let backupData = try Data(contentsOf: backup)
+        let recovered = try decode(backupData)
+        try fileManager.createDirectory(at: url.deletingLastPathComponent(),
+                                        withIntermediateDirectories: true)
+        try backupData.write(to: url, options: .atomic)
+        return recovered
+    }
+
+    static func save(_ data: Data, to url: URL) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
+        try data.write(to: backupURL(for: url), options: .atomic)
+    }
+}
+
 enum ExportQueueStore {
     static let defaultURL: URL = {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -472,22 +506,23 @@ enum ExportQueueStore {
     }()
 
     static func load(from url: URL) throws -> [ExportJobSnapshot] {
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-        let journal = try JSONDecoder().decode(ExportQueueJournal.self,
-                                               from: Data(contentsOf: url))
-        guard journal.version == ExportQueueJournal.currentVersion else {
-            throw FFmpeg.ProcessError(command: "export queue",
-                                      stderr: "Unsupported export queue version \(journal.version).")
+        let journal = try DurableQueueJournal.load(from: url) { data in
+            let decoded = try JSONDecoder().decode(ExportQueueJournal.self, from: data)
+            guard decoded.version == ExportQueueJournal.currentVersion else {
+                throw FFmpeg.ProcessError(
+                    command: "export queue",
+                    stderr: "Unsupported export queue version \(decoded.version).")
+            }
+            return decoded
         }
-        return journal.jobs.map { $0.recoveringInterruptedEncode() }
+        return (journal?.jobs ?? []).map { $0.recoveringInterruptedEncode() }
     }
 
     static func save(_ snapshots: [ExportJobSnapshot], to url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(ExportQueueJournal(jobs: snapshots)).write(to: url, options: .atomic)
+        try DurableQueueJournal.save(
+            encoder.encode(ExportQueueJournal(jobs: snapshots)), to: url)
     }
 }
 

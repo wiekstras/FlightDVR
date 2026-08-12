@@ -960,14 +960,14 @@ enum SelfTest {
             throw Failure("removing a publish job did not clean up its managed thumbnail")
         }
         let exportAssetJobID = UUID()
-        let exportJournalURL = workDir.appendingPathComponent("asset-export-queue.json")
+        let assetExportJournalURL = workDir.appendingPathComponent("asset-export-queue.json")
         let exportOwnedDraft = try PublishAssetStore.importingThumbnail(
-            in: assetDraft, jobID: exportAssetJobID, queueURL: exportJournalURL)
+            in: assetDraft, jobID: exportAssetJobID, queueURL: assetExportJournalURL)
         guard let exportOwnedThumbnail = exportOwnedDraft.thumbnailURL,
               FileManager.default.fileExists(atPath: exportOwnedThumbnail.path) else {
             throw Failure("export-to-publish handoff did not secure its thumbnail during encoding")
         }
-        PublishAssetStore.removeAssets(for: exportAssetJobID, queueURL: exportJournalURL)
+        PublishAssetStore.removeAssets(for: exportAssetJobID, queueURL: assetExportJournalURL)
         let assetQueueURL = workDir.appendingPathComponent("asset-publish-queue.json")
         let assetQueue = PublishQueue(persistenceURL: assetQueueURL)
         let assetExport = ExportJob(

@@ -1061,9 +1061,10 @@ enum StitchCommandBuilder {
         }
         var deliveryVideoOut = videoOut
         if settings.preset == .social {
-            graphLines.append("[\(videoOut)]\(settings.socialProfile.videoFilter(
+            let deliveryFilter = settings.socialProfile.videoFilter(
                 framing: settings.socialFraming, positionX: settings.cropPositionX,
-                positionY: settings.cropPositionY))[vdelivery]")
+                positionY: settings.cropPositionY)
+            graphLines.append("[\(videoOut)]\(deliveryFilter)[vdelivery]")
             deliveryVideoOut = "vdelivery"
         }
         let wantsAudio = settings.keepAudio && graphs.contains { $0.audioLabel != nil }

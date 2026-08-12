@@ -17,10 +17,10 @@ enum SelfTest {
 
         func upload(file: URL, draft: PublishDraft,
                     progress: @escaping @Sendable (Double) -> Void) async throws {
-            lock.lock()
-            uploadCount += 1
-            let call = uploadCount
-            lock.unlock()
+            let call = lock.withLock {
+                uploadCount += 1
+                return uploadCount
+            }
             // Deliberately ignore task cancellation like a provider request
             // which cannot abort once the server has accepted its body.
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in

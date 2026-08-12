@@ -926,12 +926,35 @@ enum SelfTest {
             throw Failure("completed publishing attempt remained active")
         }
 
+        let pendingProviderIssues = ProviderAvailabilityValidator.validate(
+            platforms: [.youtube], statuses: [:])
+        let mixedProviderIssues = ProviderAvailabilityValidator.validate(
+            platforms: [.youtube, .tiktok, .instagram],
+            statuses: [.youtube: .connected(accountName: "Creator"),
+                       .tiktok: .disconnected,
+                       .instagram: .unavailable(reason: "Instagram is not configured.")])
+        guard pendingProviderIssues.count == 1,
+              pendingProviderIssues[0].message.contains("Checking YouTube"),
+              mixedProviderIssues.count == 2,
+              mixedProviderIssues.contains(where: { $0.message.contains("Connect a TikTok") }),
+              mixedProviderIssues.contains(where: { $0.message == "Instagram is not configured." }),
+              ProviderAvailabilityValidator.validate(
+                platforms: [.youtube],
+                statuses: [.youtube: .connected(accountName: "Creator")]).isEmpty else {
+            throw Failure("publishing provider availability preflight was not actionable")
+        }
+
         let racingProvider = RacingPublishProvider()
         let racingQueueURL = workDir.appendingPathComponent("racing-publish-queue.json")
         try? FileManager.default.removeItem(at: racingQueueURL)
         let racingQueue = PublishQueue(
             persistenceURL: racingQueueURL,
             providers: [.youtube: racingProvider as any PublishingProvider])
+        Task { await racingQueue.refreshProviderStatuses() }
+        guard waitUntil({ racingQueue.providerStatuses[.youtube]
+            == .connected(accountName: "Self-test") }) else {
+            throw Failure("publishing composer did not receive provider connection status")
+        }
         var racingDraft = PublishDraft()
         racingDraft.title = "Attempt identity"
         racingDraft.platforms = [.youtube]

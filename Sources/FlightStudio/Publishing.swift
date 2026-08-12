@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import AppKit
 
-enum PublishingPlatform: String, CaseIterable, Identifiable, Codable, Hashable {
+enum PublishingPlatform: String, CaseIterable, Identifiable, Codable, Hashable, Sendable {
     case youtube = "YouTube"
     case tiktok = "TikTok"
     case instagram = "Instagram"
@@ -17,14 +17,14 @@ enum PublishingPlatform: String, CaseIterable, Identifiable, Codable, Hashable {
     }
 }
 
-enum PublishVisibility: String, CaseIterable, Identifiable, Codable {
+enum PublishVisibility: String, CaseIterable, Identifiable, Codable, Sendable {
     case publicVideo = "Public"
     case unlisted = "Unlisted"
     case privateOnly = "Private"
     var id: String { rawValue }
 }
 
-struct PublishDraft: Codable, Equatable {
+struct PublishDraft: Codable, Equatable, Sendable {
     var title = ""
     var caption = ""
     var hashtags = ""
@@ -221,14 +221,14 @@ enum PublishThumbnailBuilder {
     }
 }
 
-protocol PublishingProvider {
+protocol PublishingProvider: Sendable {
     var platform: PublishingPlatform { get }
     func connectionStatus() async -> ProviderConnectionStatus
     func upload(file: URL, draft: PublishDraft,
                 progress: @escaping @Sendable (Double) -> Void) async throws
 }
 
-enum ProviderConnectionStatus: Equatable {
+enum ProviderConnectionStatus: Equatable, Sendable {
     case disconnected
     case connected(accountName: String)
     case unavailable(reason: String)
@@ -246,6 +246,28 @@ struct UnconfiguredPublishingProvider: PublishingProvider {
                 progress: @escaping @Sendable (Double) -> Void) async throws {
         throw FFmpeg.ProcessError(command: "publish",
                                   stderr: "\(platform.rawValue) publishing is not configured.")
+    }
+}
+
+enum ProviderAvailabilityValidator {
+    static func validate(platforms: Set<PublishingPlatform>,
+                         statuses: [PublishingPlatform: ProviderConnectionStatus]) -> [PublishIssue] {
+        platforms.sorted { $0.rawValue < $1.rawValue }.compactMap { platform in
+            guard let status = statuses[platform] else {
+                return PublishIssue(severity: .error,
+                                    message: "Checking \(platform.rawValue) account availability…")
+            }
+            switch status {
+            case .connected:
+                return nil
+            case .disconnected:
+                return PublishIssue(
+                    severity: .error,
+                    message: "Connect a \(platform.rawValue) account before publishing.")
+            case .unavailable(let reason):
+                return PublishIssue(severity: .error, message: reason)
+            }
+        }
     }
 }
 
@@ -413,6 +435,7 @@ struct PublishAttemptRegistry<Key: Hashable> {
 final class PublishQueue: ObservableObject {
     @Published var jobs: [PublishJob] = []
     @Published private(set) var persistenceError: String?
+    @Published private(set) var providerStatuses: [PublishingPlatform: ProviderConnectionStatus] = [:]
 
     private let providers: [PublishingPlatform: any PublishingProvider]
     private let persistenceURL: URL
@@ -423,6 +446,7 @@ final class PublishQueue: ObservableObject {
     }
     private var uploadTasks: [UploadKey: Task<Void, Never>] = [:]
     private var uploadAttempts = PublishAttemptRegistry<UploadKey>()
+    private var providerRefreshID: UUID?
 
     init(persistenceURL: URL = PublishQueueStore.defaultURL,
          providers: [PublishingPlatform: any PublishingProvider]? = nil) {
@@ -446,6 +470,33 @@ final class PublishQueue: ObservableObject {
 
     func enqueue(export: ExportJob, draft: PublishDraft) -> [PublishIssue] {
         enqueueJob(export: export, draft: draft).issues
+    }
+
+    func refreshProviderStatuses() async {
+        let refreshID = UUID()
+        providerRefreshID = refreshID
+        let providers = self.providers
+        let results = await withTaskGroup(
+            of: (PublishingPlatform, ProviderConnectionStatus).self,
+            returning: [PublishingPlatform: ProviderConnectionStatus].self
+        ) { group in
+            for (platform, provider) in providers {
+                group.addTask {
+                    let status = await provider.connectionStatus()
+                    return (platform, status)
+                }
+            }
+            var statuses: [PublishingPlatform: ProviderConnectionStatus] = [:]
+            for await (platform, status) in group { statuses[platform] = status }
+            return statuses
+        }
+        guard providerRefreshID == refreshID else { return }
+        providerStatuses = results
+        providerRefreshID = nil
+    }
+
+    func providerAvailabilityIssues(for platforms: Set<PublishingPlatform>) -> [PublishIssue] {
+        ProviderAvailabilityValidator.validate(platforms: platforms, statuses: providerStatuses)
     }
 
     func enqueueJob(export: ExportJob, draft: PublishDraft)

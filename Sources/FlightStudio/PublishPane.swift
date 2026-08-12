@@ -119,6 +119,7 @@ struct PublishPane: View {
         }
         .onChange(of: sourceMode) { _, _ in refreshIssues() }
         .onChange(of: deliverySettings) { _, _ in refreshIssues() }
+        .onChange(of: publishQueue.providerStatuses) { _, _ in refreshIssues() }
         .onChange(of: draft) { _, newDraft in
             refreshIssues()
             draftSaveTask?.cancel()
@@ -130,6 +131,10 @@ struct PublishPane: View {
         }
         .onAppear {
             if selectedExportID == nil { selectedExportID = completedExports.last?.id }
+            refreshIssues()
+        }
+        .task {
+            await publishQueue.refreshProviderStatuses()
             refreshIssues()
         }
         .onDisappear {
@@ -271,6 +276,8 @@ struct PublishPane: View {
     }
 
     private func publish() {
+        refreshIssues()
+        guard !issues.contains(where: { $0.severity == .error }) else { return }
         if sourceMode == .currentEdit {
             guard let clip = store.selectedClip else { return }
             issues = exportQueue.enqueueForPublishing(
@@ -296,6 +303,7 @@ struct PublishPane: View {
                 media: selectedExport.outputInfo,
                 fileExists: FileManager.default.fileExists(atPath: selectedExport.outputURL.path))
         }
+        issues += publishQueue.providerAvailabilityIssues(for: draft.platforms)
     }
 
     @ViewBuilder

@@ -99,6 +99,9 @@ it, and add eased speed ramps.
   canvas, codec, duration, frame rate, dimensions and API file-size limits.
   Choose a JPEG/PNG YouTube thumbnail or generate a 1280×720 frame from the
   completed export without leaving DVR Studio.
+  Provider connection status is checked concurrently before delivery; missing
+  accounts or unprovisioned integrations block before encoding rather than
+  wasting time on a video that cannot be uploaded.
 - **Crash-safe exports** — queued export jobs survive relaunches, including
   their frozen edit instructions and media metadata, so later timeline changes
   cannot alter an already queued deliverable. Encoders write to private staging

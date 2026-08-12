@@ -306,8 +306,12 @@ enum SelfTest {
         }
         defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
         let metadataKey = "metadata-index-test"
+        let metadataBackup = workDir.appendingPathComponent("metadata-index-backup.json")
+        try? FileManager.default.removeItem(at: metadataBackup)
+        defer { try? FileManager.default.removeItem(at: metadataBackup) }
         let metadataIndex = ClipLibraryMetadataIndex(defaults: isolatedDefaults,
-                                                     key: metadataKey, saveDelay: 60)
+                                                     key: metadataKey, saveDelay: 60,
+                                                     backupURL: metadataBackup)
         let indexedURL = workDir.appendingPathComponent("indexed.ts")
         let indexedRecord = ClipLibraryRecord(favorite: true, tags: ["freestyle"], edit: plan)
         metadataIndex.save(indexedRecord, for: indexedURL)
@@ -322,7 +326,8 @@ enum SelfTest {
         }
         metadataIndex.flush()
         metadataIndex.flush()
-        let reloadedIndex = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
+        let reloadedIndex = ClipLibraryMetadataIndex(
+            defaults: isolatedDefaults, key: metadataKey, backupURL: metadataBackup)
         guard metadataIndex.persistedWriteCount == 1,
               reloadedIndex.recordCount == 1_000,
               reloadedIndex.record(for: indexedURL) == indexedRecord else {
@@ -347,10 +352,23 @@ enum SelfTest {
             throw Failure("renaming a recording lost its library metadata")
         }
         metadataIndex.flush()
-        let renamedReload = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
+        let renamedReload = ClipLibraryMetadataIndex(
+            defaults: isolatedDefaults, key: metadataKey, backupURL: metadataBackup)
         guard renamedReload.record(for: renamedSource, identity: originalIdentity) == identityRecord,
               renamedReload.recordCount == 1_001 else {
             throw Failure("renamed recording metadata migration was not durable")
+        }
+        isolatedDefaults.set(Data("corrupt primary archive".utf8), forKey: metadataKey)
+        let backupRecovery = ClipLibraryMetadataIndex(
+            defaults: isolatedDefaults, key: metadataKey, backupURL: metadataBackup)
+        guard backupRecovery.record(for: renamedSource, identity: originalIdentity) == identityRecord,
+              backupRecovery.recordCount == 1_001 else {
+            throw Failure("library metadata backup did not recover a malformed primary archive")
+        }
+        backupRecovery.flush()
+        let repairedPrimary = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
+        guard repairedPrimary.record(for: renamedSource, identity: originalIdentity) == identityRecord else {
+            throw Failure("metadata backup recovery did not repair the primary archive")
         }
         print("library metadata index ok")
 

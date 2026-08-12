@@ -15,7 +15,11 @@ struct ClipLibraryRecord: Codable, Equatable {
 /// decoded the complete UserDefaults payload, turning large scans into repeated
 /// parsing work. The lock also keeps background queue recovery and UI edits safe.
 final class ClipLibraryMetadataIndex: @unchecked Sendable {
-    static let shared = ClipLibraryMetadataIndex()
+    static let defaultBackupURL = FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("FlightStudio", isDirectory: true)
+        .appendingPathComponent("library-metadata-v2.json")
+    static let shared = ClipLibraryMetadataIndex(backupURL: defaultBackupURL)
 
     private struct Archive: Codable {
         var version = 2
@@ -26,6 +30,7 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key: String
     private let saveDelay: TimeInterval
+    private let backupURL: URL?
     private let persistenceQueue: DispatchQueue
     private let lock = NSLock()
     private var records: [String: ClipLibraryRecord]
@@ -36,21 +41,33 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
     private var persistedRevision = 0
 
     init(defaults: UserDefaults = .standard, key: String = "clipLibraryMetadata-v1",
-         saveDelay: TimeInterval = 0.25) {
+         saveDelay: TimeInterval = 0.25, backupURL: URL? = nil) {
         self.defaults = defaults
         self.key = key
         self.saveDelay = max(saveDelay, 0)
+        self.backupURL = backupURL
         self.persistenceQueue = DispatchQueue(
             label: "studio.dvr.library-metadata.\(UUID().uuidString)", qos: .utility)
-        if let data = defaults.data(forKey: key),
-           let archive = try? JSONDecoder().decode(Archive.self, from: data),
-           archive.version == 2 {
+        let primaryData = defaults.data(forKey: key)
+        let primaryArchive = primaryData.flatMap { try? JSONDecoder().decode(Archive.self, from: $0) }
+        let legacyRecords = primaryData.flatMap {
+            try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: $0)
+        }
+        if let archive = primaryArchive, archive.version >= 2 {
             records = archive.records
             pathsByIdentity = archive.pathsByIdentity
-        } else if let data = defaults.data(forKey: key) {
+        } else if let legacyRecords {
             // Transparently upgrade the original path-keyed dictionary.
-            records = (try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)) ?? [:]
+            records = legacyRecords
             pathsByIdentity = [:]
+        } else if let backupURL, let data = try? Data(contentsOf: backupURL),
+                  let archive = try? JSONDecoder().decode(Archive.self, from: data),
+                  archive.version >= 2 {
+            // Never interpret a malformed primary payload as an empty library
+            // when the last atomic archive is still recoverable.
+            records = archive.records
+            pathsByIdentity = archive.pathsByIdentity
+            revision = 1
         } else {
             records = [:]
             pathsByIdentity = [:]
@@ -129,6 +146,11 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
         let snapshotRevision = revision
         lock.unlock()
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        if let backupURL {
+            try? FileManager.default.createDirectory(
+                at: backupURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: backupURL, options: .atomic)
+        }
         defaults.set(data, forKey: key)
         lock.lock()
         persistedRevision = max(persistedRevision, snapshotRevision)

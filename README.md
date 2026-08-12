@@ -25,7 +25,9 @@ it, and add eased speed ramps.
   repeated full-library sorting during unrelated SwiftUI updates. Filesystem
   identities preserve favorites, tags, highlights and edit recovery when a
   recording is renamed or moved on the same volume; legacy path-only records
-  upgrade automatically when scanned.
+  upgrade automatically when scanned. An atomic Application Support backup
+  repairs a malformed primary metadata archive before new work can overwrite
+  favorites, tags, highlights, or automatic edit recovery.
 - **Manage** — move clips to the Trash (always recoverable, never hard-deleted)
   from the right-click menu, the Delete key, or Clips → Move Ticked to Trash.
 - **Preview natively** — `.ts` files are losslessly remuxed into a cache with the

@@ -306,12 +306,25 @@ enum SelfTest {
         }
         defer { isolatedDefaults.removePersistentDomain(forName: suiteName) }
         let metadataKey = "metadata-index-test"
-        let metadataIndex = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
+        let metadataIndex = ClipLibraryMetadataIndex(defaults: isolatedDefaults,
+                                                     key: metadataKey, saveDelay: 60)
         let indexedURL = workDir.appendingPathComponent("indexed.ts")
         let indexedRecord = ClipLibraryRecord(favorite: true, tags: ["freestyle"], edit: plan)
         metadataIndex.save(indexedRecord, for: indexedURL)
+        for index in 1..<1_000 {
+            metadataIndex.save(
+                ClipLibraryRecord(favorite: index.isMultiple(of: 2), tags: ["batch"]),
+                for: workDir.appendingPathComponent("indexed-\(index).ts"))
+        }
+        guard metadataIndex.persistedWriteCount == 0,
+              metadataIndex.recordCount == 1_000 else {
+            throw Failure("library metadata writes were not batched in memory")
+        }
+        metadataIndex.flush()
+        metadataIndex.flush()
         let reloadedIndex = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
-        guard metadataIndex.recordCount == 1, reloadedIndex.recordCount == 1,
+        guard metadataIndex.persistedWriteCount == 1,
+              reloadedIndex.recordCount == 1_000,
               reloadedIndex.record(for: indexedURL) == indexedRecord else {
             throw Failure("library metadata index did not persist or reload records")
         }

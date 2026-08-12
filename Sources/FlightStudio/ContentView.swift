@@ -4,6 +4,7 @@ import AVKit
 struct ContentView: View {
     @EnvironmentObject var store: ClipStore
     @EnvironmentObject var queue: ExportQueue
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var player = PlayerController()
 
     var body: some View {
@@ -80,6 +81,9 @@ struct ContentView: View {
         }
         .onOpenURL { url in
             _ = store.openImportedURLs([url])
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { ClipLibraryMetadataIndex.shared.flush() }
         }
         .alert("Couldn’t open edit project", isPresented: Binding(
             get: { store.projectOpenError != nil },

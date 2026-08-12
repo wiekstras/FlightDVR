@@ -19,12 +19,22 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
 
     private let defaults: UserDefaults
     private let key: String
+    private let saveDelay: TimeInterval
+    private let persistenceQueue: DispatchQueue
     private let lock = NSLock()
     private var records: [String: ClipLibraryRecord]
+    private var saveWorkItem: DispatchWorkItem?
+    private var writeCount = 0
+    private var revision = 0
+    private var persistedRevision = 0
 
-    init(defaults: UserDefaults = .standard, key: String = "clipLibraryMetadata-v1") {
+    init(defaults: UserDefaults = .standard, key: String = "clipLibraryMetadata-v1",
+         saveDelay: TimeInterval = 0.25) {
         self.defaults = defaults
         self.key = key
+        self.saveDelay = max(saveDelay, 0)
+        self.persistenceQueue = DispatchQueue(
+            label: "studio.dvr.library-metadata.\(UUID().uuidString)", qos: .utility)
         if let data = defaults.data(forKey: key) {
             records = (try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)) ?? [:]
         } else {
@@ -40,17 +50,52 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
 
     func save(_ record: ClipLibraryRecord, for url: URL) {
         lock.lock()
-        defer { lock.unlock() }
         records[url.standardizedFileURL.path] = record
-        if let data = try? JSONEncoder().encode(records) {
-            defaults.set(data, forKey: key)
+        revision += 1
+        saveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.persistCurrentRecords() }
+        saveWorkItem = item
+        lock.unlock()
+        persistenceQueue.asyncAfter(deadline: .now() + saveDelay, execute: item)
+    }
+
+    /// Used when the app resigns active and by durability tests. UI edits remain
+    /// in memory immediately; this waits only at a lifecycle boundary.
+    func flush() {
+        lock.lock()
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        lock.unlock()
+        persistenceQueue.sync { persistCurrentRecords() }
+    }
+
+    private func persistCurrentRecords() {
+        lock.lock()
+        guard revision != persistedRevision else {
+            lock.unlock()
+            return
         }
+        let snapshot = records
+        let snapshotRevision = revision
+        lock.unlock()
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        defaults.set(data, forKey: key)
+        lock.lock()
+        persistedRevision = max(persistedRevision, snapshotRevision)
+        writeCount += 1
+        lock.unlock()
     }
 
     var recordCount: Int {
         lock.lock()
         defer { lock.unlock() }
         return records.count
+    }
+
+    var persistedWriteCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return writeCount
     }
 }
 

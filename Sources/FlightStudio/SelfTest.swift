@@ -6,7 +6,33 @@ import AppKit
 /// applies a trim + middle cut + 2× speed ramp + music mix, exports with the same
 /// command builder the GUI uses, and verifies the result with ffprobe.
 enum SelfTest {
-    static func runIfRequested() {
+    private final class RacingPublishProvider: PublishingProvider, @unchecked Sendable {
+        let platform = PublishingPlatform.youtube
+        private let lock = NSLock()
+        private var uploadCount = 0
+
+        func connectionStatus() async -> ProviderConnectionStatus {
+            .connected(accountName: "Self-test")
+        }
+
+        func upload(file: URL, draft: PublishDraft,
+                    progress: @escaping @Sendable (Double) -> Void) async throws {
+            lock.lock()
+            uploadCount += 1
+            let call = uploadCount
+            lock.unlock()
+            // Deliberately ignore task cancellation like a provider request
+            // which cannot abort once the server has accepted its body.
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                DispatchQueue.global().asyncAfter(deadline: .now() + (call == 1 ? 0.2 : 0.03)) {
+                    progress(call == 1 ? 0.25 : 1)
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    @MainActor static func runIfRequested() {
         guard CommandLine.arguments.contains("--selftest") else { return }
         do {
             try run()
@@ -23,7 +49,7 @@ enum SelfTest {
         init(_ d: String) { description = d }
     }
 
-    static func run() throws {
+    @MainActor static func run() throws {
         let idx = CommandLine.arguments.firstIndex(of: "--selftest")!
         let workDir: URL
         if let dirArg = CommandLine.arguments.dropFirst(idx + 1).first {
@@ -711,6 +737,52 @@ enum SelfTest {
               !PublishState.uploading.canStart, !PublishState.uploaded.canStart else {
             throw Failure("publishing retry eligibility did not preserve terminal destinations")
         }
+
+        // A cancelled provider can complete after its replacement retry. Only
+        // the current attempt is allowed to mutate queue state.
+        var attempts = PublishAttemptRegistry<String>()
+        let cancelledAttempt = attempts.begin("youtube")
+        attempts.invalidate("youtube")
+        let retryAttempt = attempts.begin("youtube")
+        guard !attempts.isCurrent(cancelledAttempt, for: "youtube"),
+              attempts.isCurrent(retryAttempt, for: "youtube") else {
+            throw Failure("publishing attempt identity accepted a stale completion")
+        }
+        attempts.finish(cancelledAttempt, for: "youtube")
+        guard attempts.isCurrent(retryAttempt, for: "youtube") else {
+            throw Failure("stale publishing cleanup invalidated the active retry")
+        }
+        attempts.finish(retryAttempt, for: "youtube")
+        guard !attempts.isCurrent(retryAttempt, for: "youtube") else {
+            throw Failure("completed publishing attempt remained active")
+        }
+
+        let racingProvider = RacingPublishProvider()
+        let racingQueueURL = workDir.appendingPathComponent("racing-publish-queue.json")
+        try? FileManager.default.removeItem(at: racingQueueURL)
+        let racingQueue = PublishQueue(
+            persistenceURL: racingQueueURL,
+            providers: [.youtube: racingProvider as any PublishingProvider])
+        var racingDraft = PublishDraft()
+        racingDraft.title = "Attempt identity"
+        racingDraft.platforms = [.youtube]
+        let racingJob = PublishJob(exportURL: stitchOut, settings: settings,
+                                   draft: racingDraft)
+        racingQueue.jobs.append(racingJob)
+        racingQueue.start(racingJob)
+        guard waitUntil({ racingJob.states[.youtube] == .uploading }) else {
+            throw Failure("publishing race test never started its first upload")
+        }
+        racingQueue.cancel(racingJob, platform: .youtube)
+        racingQueue.retry(racingJob, platform: .youtube)
+        guard waitUntil({ racingJob.states[.youtube] == .uploaded }) else {
+            throw Failure("publishing retry did not complete")
+        }
+        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.3))
+        guard racingJob.states[.youtube] == .uploaded,
+              racingJob.progress[.youtube] == 1 else {
+            throw Failure("cancelled publishing attempt overwrote its completed retry")
+        }
         print("publishing queue recovery ok")
 
         let publishSuiteName = "FlightStudio.PublishDraft.SelfTest.\(UUID().uuidString)"
@@ -894,5 +966,16 @@ enum SelfTest {
             throw Failure("social export \(socialMB) MB is far from the 4 MB target")
         }
         print("social ok: \(String(format: "%.2f", socialMB)) MB against a 4 MB target")
+    }
+
+    @MainActor private static func waitUntil(timeout: TimeInterval = 2,
+                                             _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            _ = RunLoop.current.run(mode: .default,
+                                    before: Date().addingTimeInterval(0.01))
+        }
+        return condition()
     }
 }

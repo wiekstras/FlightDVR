@@ -386,6 +386,31 @@ enum PublishQueueStore {
     }
 }
 
+/// Identifies the one upload attempt currently allowed to mutate a destination.
+/// Providers are external async systems and may return after cancellation; a
+/// late completion from an older attempt must never overwrite a newer retry.
+struct PublishAttemptRegistry<Key: Hashable> {
+    private var attempts: [Key: UUID] = [:]
+
+    mutating func begin(_ key: Key) -> UUID {
+        let id = UUID()
+        attempts[key] = id
+        return id
+    }
+
+    func isCurrent(_ id: UUID, for key: Key) -> Bool {
+        attempts[key] == id
+    }
+
+    mutating func invalidate(_ key: Key) {
+        attempts[key] = nil
+    }
+
+    mutating func finish(_ id: UUID, for key: Key) {
+        if attempts[key] == id { attempts[key] = nil }
+    }
+}
+
 @MainActor
 final class PublishQueue: ObservableObject {
     @Published var jobs: [PublishJob] = []
@@ -399,6 +424,7 @@ final class PublishQueue: ObservableObject {
         let platform: PublishingPlatform
     }
     private var uploadTasks: [UploadKey: Task<Void, Never>] = [:]
+    private var uploadAttempts = PublishAttemptRegistry<UploadKey>()
 
     init(persistenceURL: URL = PublishQueueStore.defaultURL,
          providers: [PublishingPlatform: any PublishingProvider]? = nil) {
@@ -469,15 +495,19 @@ final class PublishQueue: ObservableObject {
             guard let provider = providers[platform] else { continue }
             let key = UploadKey(jobID: job.id, platform: platform)
             guard uploadTasks[key] == nil else { continue }
+            let attemptID = uploadAttempts.begin(key)
             uploadTasks[key] = Task { [weak self, weak job] in
-                guard let self, let job else { return }
-                defer { uploadTasks[key] = nil }
-                let connection = await provider.connectionStatus()
-                guard !Task.isCancelled else {
-                    job.states[platform] = .cancelled
-                    persist()
-                    return
+                guard let self else { return }
+                defer {
+                    if uploadAttempts.isCurrent(attemptID, for: key) {
+                        uploadTasks[key] = nil
+                        uploadAttempts.finish(attemptID, for: key)
+                    }
                 }
+                guard let job else { return }
+                let connection = await provider.connectionStatus()
+                guard uploadAttempts.isCurrent(attemptID, for: key),
+                      !Task.isCancelled else { return }
                 switch connection {
                 case .connected:
                     job.states[platform] = .uploading
@@ -485,16 +515,21 @@ final class PublishQueue: ObservableObject {
                     do {
                         try await provider.upload(file: job.exportURL, draft: job.draft) { progress in
                             Task { @MainActor in
+                                guard self.uploadAttempts.isCurrent(attemptID, for: key),
+                                      job.states[platform] == .uploading else { return }
                                 job.progress[platform] = min(max(progress, 0), 1)
                                 self.schedulePersistence()
                             }
                         }
+                        guard uploadAttempts.isCurrent(attemptID, for: key) else { return }
                         try Task.checkCancellation()
                         job.progress[platform] = 1
                         job.states[platform] = .uploaded
                     } catch is CancellationError {
+                        guard uploadAttempts.isCurrent(attemptID, for: key) else { return }
                         job.states[platform] = .cancelled
                     } catch {
+                        guard uploadAttempts.isCurrent(attemptID, for: key) else { return }
                         job.states[platform] = .failed(error.localizedDescription)
                     }
                 case .disconnected:
@@ -511,6 +546,7 @@ final class PublishQueue: ObservableObject {
         let key = UploadKey(jobID: job.id, platform: platform)
         uploadTasks[key]?.cancel()
         uploadTasks[key] = nil
+        uploadAttempts.invalidate(key)
         guard job.states[platform] != .uploaded else { return }
         job.states[platform] = .cancelled
         persist()
@@ -518,8 +554,10 @@ final class PublishQueue: ObservableObject {
 
     func remove(_ job: PublishJob) {
         for platform in job.draft.platforms {
-            uploadTasks[UploadKey(jobID: job.id, platform: platform)]?.cancel()
-            uploadTasks[UploadKey(jobID: job.id, platform: platform)] = nil
+            let key = UploadKey(jobID: job.id, platform: platform)
+            uploadTasks[key]?.cancel()
+            uploadTasks[key] = nil
+            uploadAttempts.invalidate(key)
         }
         jobs.removeAll { $0.id == job.id }
         persist()

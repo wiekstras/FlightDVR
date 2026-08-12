@@ -2,6 +2,20 @@ import SwiftUI
 import AVKit
 import Combine
 
+enum PreviewScaling: String, CaseIterable, Identifiable {
+    case fit = "Fit"
+    case fill = "Fill"
+    var id: String { rawValue }
+}
+
+enum PlaybackMath {
+    static let supportedRates = [0.25, 0.5, 1.0, 1.5, 2.0]
+    static func sanitizedRate(_ rate: Double) -> Double {
+        guard rate.isFinite else { return 1 }
+        return supportedRates.min(by: { abs($0 - rate) < abs($1 - rate) }) ?? 1
+    }
+}
+
 @MainActor
 final class PlayerController: ObservableObject {
     let player = AVPlayer()
@@ -9,6 +23,7 @@ final class PlayerController: ObservableObject {
     @Published var duration: Double = 0          // duration of that item
     @Published var isReady = false
     @Published var previewingEdit = false        // playing the composition, not the raw clip
+    @Published private(set) var playbackRate = 1.0
     private var timeObserver: Any?
     private(set) weak var clip: Clip?
     private weak var store: ClipStore?
@@ -107,7 +122,18 @@ final class PlayerController: ObservableObject {
     }
 
     func togglePlay() {
-        if player.timeControlStatus == .playing { player.pause() } else { player.play() }
+        if player.timeControlStatus == .playing {
+            player.pause()
+        } else {
+            player.playImmediately(atRate: Float(playbackRate))
+        }
+    }
+
+    func setPlaybackRate(_ rate: Double) {
+        playbackRate = PlaybackMath.sanitizedRate(rate)
+        if player.timeControlStatus == .playing {
+            player.rate = Float(playbackRate)
+        }
     }
 
     /// Review controls operate in source time, so they stay intuitive whether
@@ -136,6 +162,7 @@ final class PlayerController: ObservableObject {
         }
         let aSrc = try await asset.loadTracks(withMediaType: .audio).first
         let duration = sourceDuration > 0 ? sourceDuration : (try await asset.load(.duration)).seconds
+        let plan = plan.sanitized(duration: duration)
 
         let comp = AVMutableComposition()
         let ts: CMTimeScale = 600
@@ -143,7 +170,9 @@ final class PlayerController: ObservableObject {
                                               preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw FFmpeg.ProcessError(command: "", stderr: "could not build composition")
         }
-        let wantOriginalAudio = aSrc != nil && !(plan.music?.muteOriginal ?? false)
+        let wantOriginalAudio = aSrc != nil
+            && !(plan.music?.muteOriginal ?? false)
+            && !(plan.sourceAudio?.isMuted ?? false)
         let aDst = wantOriginalAudio
             ? comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
             : nil
@@ -167,6 +196,28 @@ final class PlayerController: ObservableObject {
         vDst.preferredTransform = try await vSrc.load(.preferredTransform)
 
         var mixParams: [AVMutableAudioMixInputParameters] = []
+        if let audio = plan.sourceAudio, !audio.isDefault, let aDst {
+            let p = AVMutableAudioMixInputParameters(track: aDst)
+            let volume = Float(audio.volume)
+            p.setVolume(volume, at: .zero)
+            let outputDuration = cursor.seconds
+            let fadeIn = min(audio.fadeIn, outputDuration)
+            if fadeIn > 0.01 {
+                p.setVolumeRamp(fromStartVolume: 0, toEndVolume: volume,
+                                timeRange: CMTimeRange(
+                                    start: .zero,
+                                    duration: CMTime(seconds: fadeIn, preferredTimescale: ts)))
+            }
+            let fadeOut = min(audio.fadeOut, outputDuration)
+            if fadeOut > 0.01 {
+                p.setVolumeRamp(fromStartVolume: volume, toEndVolume: 0,
+                                timeRange: CMTimeRange(
+                                    start: CMTime(seconds: max(0, outputDuration - fadeOut),
+                                                  preferredTimescale: ts),
+                                    duration: CMTime(seconds: fadeOut, preferredTimescale: ts)))
+            }
+            mixParams.append(p)
+        }
         if let music = plan.music {
             let mAsset = AVURLAsset(url: music.url)
             if let mSrc = try await mAsset.loadTracks(withMediaType: .audio).first,
@@ -206,28 +257,46 @@ final class PlayerController: ObservableObject {
 /// SPM-built apps, so wrap AVPlayerView ourselves — sturdier and more capable.
 struct PlayerViewRepresentable: NSViewRepresentable {
     let player: AVPlayer
+    let scaling: PreviewScaling
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
         view.player = player
         view.controlsStyle = .inline
         view.showsFullScreenToggleButton = true
+        view.videoGravity = scaling == .fit ? .resizeAspect : .resizeAspectFill
         return view
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
         if view.player !== player { view.player = player }
+        let gravity: AVLayerVideoGravity = scaling == .fit ? .resizeAspect : .resizeAspectFill
+        if view.videoGravity != gravity { view.videoGravity = gravity }
     }
 }
 
 struct PlayerPane: View {
     @ObservedObject var player: PlayerController
     @EnvironmentObject var store: ClipStore
+    @State private var scaling: PreviewScaling = .fit
 
     var body: some View {
+        let clipInfo = store.selectedClip?.info
+        let sourceFPS = clipInfo?.fps ?? 0
+        let sourceDuration = clipInfo?.duration ?? player.duration
         VStack(spacing: 0) {
             ZStack {
-                PlayerViewRepresentable(player: player.player)
+                PlayerViewRepresentable(player: player.player, scaling: scaling)
+                if player.previewingEdit,
+                   let edit = store.selectedClip?.edit.sanitized(duration: sourceDuration) {
+                    ForEach(Array(edit.titleOverlays.enumerated()), id: \.offset) { _, title in
+                        if title.isVisible(at: player.currentSourceTime) {
+                            TitlePreview(title: title)
+                                .allowsHitTesting(false)
+                                .transition(.opacity)
+                        }
+                    }
+                }
                 if !player.isReady {
                     ProgressView("Preparing preview…")
                         .padding(20)
@@ -261,6 +330,7 @@ struct PlayerPane: View {
                 .buttonStyle(.borderless)
                 .keyboardShortcut("k", modifiers: [])
                 .help("Play or pause (K)")
+                .accessibilityLabel("Play or pause")
                 Button {
                     player.stepFrame(by: 1)
                 } label: {
@@ -277,16 +347,38 @@ struct PlayerPane: View {
                 .buttonStyle(.borderless)
                 .keyboardShortcut("l", modifiers: [])
                 .help("Forward 5 seconds (L)")
-                Text(timecode(player.currentTime))
+                Text(EditorTimecode.string(seconds: player.currentSourceTime, fps: sourceFPS))
                     .font(.system(size: 13, weight: .medium).monospacedDigit())
-                Text("/ \(timecode(player.duration))")
+                    .help("Current source timecode")
+                Text("/ \(EditorTimecode.string(seconds: sourceDuration, fps: sourceFPS))")
                     .font(.system(size: 13).monospacedDigit())
                     .foregroundStyle(.tertiary)
+                Picker("Speed", selection: Binding(
+                    get: { player.playbackRate },
+                    set: { player.setPlaybackRate($0) }
+                )) {
+                    ForEach(PlaybackMath.supportedRates, id: \.self) { rate in
+                        Text("\(rate.formatted())×").tag(rate)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 72)
+                .help("Playback speed")
+                Picker("View", selection: $scaling) {
+                    ForEach(PreviewScaling.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 64)
+                .help("Fit the whole video or fill the preview")
                 Spacer()
                 if let clip = store.selectedClip, !clip.edit.isDefault, let info = clip.info {
                     HStack(spacing: 4) {
                         Eyebrow("Out")
-                        Text(timecode(clip.edit.outputDuration(duration: info.duration)))
+                        Text(EditorTimecode.string(
+                            seconds: clip.edit.outputDuration(duration: info.duration),
+                            fps: info.fps))
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -307,10 +399,44 @@ struct PlayerPane: View {
     }
 }
 
-func timecode(_ seconds: Double) -> String {
-    guard seconds.isFinite, seconds >= 0 else { return "0:00.0" }
-    let total = seconds
-    let m = Int(total) / 60
-    let s = total - Double(m * 60)
-    return String(format: "%d:%04.1f", m, s)
+private struct TitlePreview: View {
+    let title: TitleOverlay
+
+    var body: some View {
+        VStack {
+            if title.position != .top { Spacer() }
+            Text(title.text)
+                .font(.system(size: 28, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 6))
+                .shadow(radius: 2)
+            if title.position != .bottom { Spacer() }
+        }
+        .padding(.vertical, 28)
+        .padding(.horizontal, 40)
+    }
+}
+
+enum EditorTimecode {
+    /// A stable source-clock representation with frame precision when probe
+    /// metadata is available, and millisecond precision as a safe fallback.
+    static func string(seconds: Double, fps: Double) -> String {
+        let safeSeconds = seconds.isFinite ? min(max(seconds, 0), 359_999_999) : 0
+        let wholeSeconds = Int(floor(safeSeconds))
+        let hours = wholeSeconds / 3_600
+        let minutes = (wholeSeconds % 3_600) / 60
+        let secs = wholeSeconds % 60
+        guard fps.isFinite, fps > 0 else {
+            let milliseconds = min(Int((safeSeconds - Double(wholeSeconds)) * 1_000), 999)
+            return String(format: "%02d:%02d:%02d.%03d", hours, minutes, secs, milliseconds)
+        }
+        let safeFPS = min(fps, 1_000)
+        let nominalFPS = max(Int(safeFPS.rounded()), 1)
+        let frame = min(Int((safeSeconds - Double(wholeSeconds)) * safeFPS), nominalFPS - 1)
+        return String(format: "%02d:%02d:%02d:%02d", hours, minutes, secs, max(frame, 0))
+    }
 }

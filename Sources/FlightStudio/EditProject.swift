@@ -1,4 +1,10 @@
 import Foundation
+import UniformTypeIdentifiers
+
+extension UTType {
+    static let flightEditProject = UTType(
+        exportedAs: "dev.flightstudio.edit-project", conformingTo: .json)
+}
 
 /// A portable, human-readable edit sidecar. It references the original clip
 /// rather than duplicating footage, so it is safe to keep beside DVR media or
@@ -10,7 +16,35 @@ struct EditProject: Codable {
     var edit: EditPlan
 }
 
+enum EditProjectError: LocalizedError, Equatable {
+    case unsupportedVersion
+    case wrongSource(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .unsupportedVersion:
+            "This edit project uses an unsupported version."
+        case .wrongSource(let filename):
+            "This project belongs to \(filename). Select that recording before opening it."
+        }
+    }
+}
+
 enum EditProjectFile {
+    static func isProjectURL(_ url: URL) -> Bool {
+        let name = url.lastPathComponent.lowercased()
+        return url.pathExtension.lowercased() == "flightedit"
+            || name.hasSuffix(".flightedit.json")
+    }
+
+    static func project(from data: Data) throws -> EditProject {
+        let project = try JSONDecoder().decode(EditProject.self, from: data)
+        guard project.version == EditProject.currentVersion else {
+            throw EditProjectError.unsupportedVersion
+        }
+        return project
+    }
+
     static func encode(clip: Clip) throws -> Data {
         let project = EditProject(sourcePath: clip.url.path, edit: clip.edit)
         let encoder = JSONEncoder()
@@ -19,13 +53,15 @@ enum EditProjectFile {
     }
 
     static func decode(_ data: Data, for clip: Clip) throws -> EditPlan {
-        let project = try JSONDecoder().decode(EditProject.self, from: data)
-        guard project.version == EditProject.currentVersion else {
-            throw FFmpeg.ProcessError(command: "project",
-                                      stderr: "This edit project uses an unsupported version.")
+        let project = try Self.project(from: data)
+        let recordedSource = URL(fileURLWithPath: project.sourcePath).standardizedFileURL
+        let selectedSource = clip.url.standardizedFileURL
+        if recordedSource != selectedSource,
+           FileManager.default.fileExists(atPath: recordedSource.path) {
+            throw EditProjectError.wrongSource(recordedSource.lastPathComponent)
         }
-        // A moved file can legitimately have a different path; the edit remains
-        // useful, so warn through the UI only when loading actually fails.
+        // If the recorded path is gone, the selected clip may be its renamed or
+        // relocated source. Keep that recovery workflow available.
         return project.edit
     }
 }

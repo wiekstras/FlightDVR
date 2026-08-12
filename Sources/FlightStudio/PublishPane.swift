@@ -1,13 +1,35 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// A compact publishing composer. It deliberately works against completed
-/// exports only, keeping encoding and upload work separate and recoverable.
+private enum PublishSourceMode: String, CaseIterable, Identifiable {
+    case currentEdit = "Current Edit"
+    case completedExport = "Completed Export"
+    var id: String { rawValue }
+}
+
+/// A compact publishing composer that can hand the current non-destructive
+/// edit through the durable export and upload queues in one action.
 struct PublishPane: View {
     @EnvironmentObject var exportQueue: ExportQueue
     @EnvironmentObject var publishQueue: PublishQueue
-    @State private var draft = PublishDraft()
+    @EnvironmentObject var store: ClipStore
+    @State private var draft: PublishDraft
     @State private var selectedExportID: UUID?
     @State private var issues: [PublishIssue] = []
+    @State private var draftSaveTask: Task<Void, Never>?
+    @State private var isGeneratingThumbnail = false
+    @State private var thumbnailError: String?
+    @State private var sourceMode: PublishSourceMode = .currentEdit
+    @State private var deliverySettings: ExportSettings = {
+        var settings = ExportSettings()
+        settings.preset = .social
+        settings.socialTargetMB = 50
+        return settings
+    }()
+
+    init() {
+        _draft = State(initialValue: PublishDraftStore.load())
+    }
 
     private var completedExports: [ExportJob] {
         exportQueue.jobs.filter { $0.state == .done }
@@ -17,10 +39,16 @@ struct PublishPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 section("Publish") {
-                    if completedExports.isEmpty {
-                        Text("Finish an export to prepare a publish job.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    Picker("Source", selection: $sourceMode) {
+                        Text("Current Edit").tag(PublishSourceMode.currentEdit)
+                        Text("Completed Export").tag(PublishSourceMode.completedExport)
+                    }
+                    .pickerStyle(.segmented)
+                    if sourceMode == .currentEdit {
+                        currentEditSource
+                    } else if completedExports.isEmpty {
+                        Text("No verified exports are available yet.")
+                            .font(.caption).foregroundStyle(.secondary)
                     } else {
                         Picker("Export", selection: $selectedExportID) {
                             Text("Choose an export").tag(Optional<UUID>.none)
@@ -28,6 +56,8 @@ struct PublishPane: View {
                                 Text(job.outputURL.lastPathComponent).tag(Optional(job.id))
                             }
                         }
+                    }
+                    if activeSourceAvailable {
                         TextField("Title", text: $draft.title)
                         TextField("Caption", text: $draft.caption, axis: .vertical)
                             .lineLimit(2...5)
@@ -38,31 +68,114 @@ struct PublishPane: View {
                             }
                         }
                         platformToggles
+                        if draft.platforms.contains(.youtube) {
+                            thumbnailEditor
+                        }
                         validationMessages
-                        Button("Queue publish") { queuePublish() }
+                        Button(sourceMode == .currentEdit ? "Export & Publish" : "Publish") {
+                            publish()
+                        }
                             .buttonStyle(.borderedProminent)
-                            .disabled(selectedExport == nil)
+                            .disabled(!activeSourceAvailable || issues.contains(where: {
+                                $0.severity == .error
+                            }))
                     }
                 }
 
                 if !publishQueue.jobs.isEmpty {
                     Divider()
                     section("Publishing queue") {
+                        HStack {
+                            Button("Resume all") { publishQueue.startAll() }
+                                .disabled(!publishQueue.jobs.contains(where: \.canStart))
+                            Spacer()
+                            Text("Uploads continue in the background")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                         ForEach(publishQueue.jobs) { job in
                             PublishJobRow(job: job)
                         }
                     }
                 }
+                if let persistenceError = publishQueue.persistenceError {
+                    Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
             .padding(14)
         }
         .onChange(of: completedExports.map(\.id)) { _, ids in
-            if selectedExportID == nil { selectedExportID = ids.last }
+            if let selected = selectedExportID {
+                if !ids.contains(selected) { selectedExportID = ids.last }
+            } else {
+                selectedExportID = ids.last
+            }
+            refreshIssues()
+        }
+        .onChange(of: selectedExportID) { _, _ in
+            refreshIssues()
+        }
+        .onChange(of: sourceMode) { _, _ in refreshIssues() }
+        .onChange(of: deliverySettings) { _, _ in refreshIssues() }
+        .onChange(of: publishQueue.providerStatuses) { _, _ in refreshIssues() }
+        .onChange(of: draft) { _, newDraft in
+            refreshIssues()
+            draftSaveTask?.cancel()
+            draftSaveTask = Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                guard !Task.isCancelled else { return }
+                PublishDraftStore.save(newDraft)
+            }
+        }
+        .onAppear {
+            if selectedExportID == nil { selectedExportID = completedExports.last?.id }
+            refreshIssues()
+        }
+        .task {
+            await publishQueue.refreshProviderStatuses()
+            refreshIssues()
+        }
+        .onDisappear {
+            draftSaveTask?.cancel()
+            PublishDraftStore.save(draft)
         }
     }
 
     private var selectedExport: ExportJob? {
         completedExports.first { $0.id == selectedExportID }
+    }
+
+    private var activeSourceAvailable: Bool {
+        sourceMode == .currentEdit ? store.selectedClip?.info != nil : selectedExport != nil
+    }
+
+    private var currentEditSource: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let clip = store.selectedClip {
+                LabeledContent("Recording") { Text(clip.name).lineLimit(1) }
+                Picker("Delivery", selection: $deliverySettings.socialProfile) {
+                    ForEach(SocialProfile.allCases) { profile in
+                        Text("\(profile.rawValue) · \(profile.aspectLabel)").tag(profile)
+                    }
+                }
+                Picker("Framing", selection: $deliverySettings.socialFraming) {
+                    ForEach(SocialFraming.allCases) { Text($0.rawValue).tag($0) }
+                }
+                HStack {
+                    Slider(value: $deliverySettings.socialTargetMB, in: 10...200, step: 5)
+                    Text("\(Int(deliverySettings.socialTargetMB)) MB")
+                        .font(.caption.monospacedDigit()).frame(width: 48)
+                }
+                Text("The edit is encoded, verified, then handed to every selected platform automatically.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                Text("Select a recording to export and publish.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .controlSize(.small)
     }
 
     private var platformToggles: some View {
@@ -85,6 +198,69 @@ struct PublishPane: View {
         }
     }
 
+    private var thumbnailEditor: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Eyebrow("YouTube Thumbnail")
+            if let url = draft.thumbnailURL, let image = NSImage(contentsOf: url) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(maxWidth: 180, maxHeight: 102)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
+            }
+            HStack {
+                Button("Choose…") { chooseThumbnail() }
+                Button(isGeneratingThumbnail ? "Generating…" : "Use Middle Frame") {
+                    generateThumbnail()
+                }
+                .disabled(isGeneratingThumbnail || selectedExport == nil)
+                if draft.thumbnailURL != nil {
+                    Button("Clear") { draft.thumbnailURL = nil }
+                }
+            }
+            .controlSize(.small)
+            if let thumbnailError {
+                Text(thumbnailError).font(.caption2).foregroundStyle(.red)
+            }
+            Text("JPEG or PNG · maximum 2 MB")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    private func chooseThumbnail() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        draft.thumbnailURL = url
+        thumbnailError = nil
+    }
+
+    private func generateThumbnail() {
+        guard let export = selectedExport else { return }
+        let output = ClipStore.cacheRoot.appendingPathComponent(
+            "publish-thumbnail-\(export.id.uuidString).jpg")
+        let time = (export.outputInfo?.duration ?? 0) / 2
+        let command = PublishThumbnailBuilder.command(source: export.outputURL,
+                                                       time: time, output: output)
+        isGeneratingThumbnail = true
+        thumbnailError = nil
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try FFmpeg.run(command)
+                }.value
+                draft.thumbnailURL = output
+            } catch {
+                thumbnailError = error.localizedDescription
+            }
+            isGeneratingThumbnail = false
+            refreshIssues()
+        }
+    }
+
     @ViewBuilder private var validationMessages: some View {
         if !issues.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
@@ -99,9 +275,35 @@ struct PublishPane: View {
         }
     }
 
-    private func queuePublish() {
-        guard let selectedExport else { return }
-        issues = publishQueue.enqueue(export: selectedExport, draft: draft)
+    private func publish() {
+        refreshIssues()
+        guard !issues.contains(where: { $0.severity == .error }) else { return }
+        if sourceMode == .currentEdit {
+            guard let clip = store.selectedClip else { return }
+            issues = exportQueue.enqueueForPublishing(
+                clip: clip, settings: deliverySettings, draft: draft)
+        } else {
+            guard let selectedExport else { return }
+            let result = publishQueue.enqueueJob(export: selectedExport, draft: draft)
+            issues = result.issues
+            guard let job = result.job,
+                  !issues.contains(where: { $0.severity == .error }) else { return }
+            publishQueue.start(job)
+        }
+    }
+
+    private func refreshIssues() {
+        if sourceMode == .currentEdit {
+            guard store.selectedClip?.info != nil else { issues = []; return }
+            issues = PublishValidator.validate(draft: draft, settings: deliverySettings)
+        } else {
+            guard let selectedExport else { issues = []; return }
+            issues = PublishValidator.validate(
+                draft: draft, settings: selectedExport.settings,
+                media: selectedExport.outputInfo,
+                fileExists: FileManager.default.fileExists(atPath: selectedExport.outputURL.path))
+        }
+        issues += publishQueue.providerAvailabilityIssues(for: draft.platforms)
     }
 
     @ViewBuilder
@@ -129,6 +331,7 @@ private struct PublishJobRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Start publishing")
+                .disabled(!job.canStart)
                 Button {
                     queue.remove(job)
                 } label: {
@@ -141,7 +344,25 @@ private struct PublishJobRow: View {
                     Image(systemName: platform.icon).frame(width: 14)
                     Text(platform.rawValue).font(.caption)
                     Spacer()
-                    publishState(job.states[platform] ?? .queued, progress: job.progress[platform])
+                    let state = job.states[platform] ?? .queued
+                    publishState(state, progress: job.progress[platform])
+                    if state == .uploading {
+                        Button {
+                            queue.cancel(job, platform: platform)
+                        } label: {
+                            Image(systemName: "stop.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Cancel \(platform.rawValue) upload")
+                    } else if state.canStart {
+                        Button {
+                            queue.retry(job, platform: platform)
+                        } label: {
+                            Image(systemName: "arrow.counterclockwise.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Retry \(platform.rawValue)")
+                    }
                 }
             }
         }

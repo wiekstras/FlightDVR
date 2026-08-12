@@ -21,7 +21,57 @@ struct MusicTrack: Equatable, Codable {
     var volume: Double = 0.8         // 0…1
     var fadeIn: Double = 1.0
     var fadeOut: Double = 2.0
-    var muteOriginal: Bool = true
+    var muteOriginal: Bool = false
+}
+
+struct SourceAudioSettings: Equatable, Codable {
+    var volume: Double = 1
+    var isMuted = false
+    var fadeIn: Double = 0
+    var fadeOut: Double = 0
+
+    var isDefault: Bool {
+        volume == 1 && !isMuted && fadeIn == 0 && fadeOut == 0
+    }
+}
+
+enum TitlePosition: String, CaseIterable, Identifiable, Codable {
+    case top = "Top"
+    case center = "Center"
+    case bottom = "Bottom"
+    var id: String { rawValue }
+}
+
+struct TitleOverlay: Equatable, Codable {
+    var text: String
+    var start: Double
+    var end: Double
+    var position: TitlePosition = .bottom
+
+    func isVisible(at sourceTime: Double) -> Bool {
+        sourceTime >= start && sourceTime <= end
+    }
+
+    static func escapedForDrawText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: ":", with: "\\:")
+            .replacingOccurrences(of: ",", with: "\\,")
+            .replacingOccurrences(of: ";", with: "\\;")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+    }
+}
+
+/// A reusable non-destructive edit variant from one source recording. Creators
+/// can preserve several moments without duplicating multi-gigabyte DVR files.
+struct SavedHighlight: Identifiable, Equatable, Codable {
+    var id = UUID()
+    var name: String
+    var edit: EditPlan
+    var createdAt = Date()
 }
 
 /// A named, non-destructive bookmark for a moment worth returning to.
@@ -31,6 +81,39 @@ struct TimelineMarker: Identifiable, Equatable, Codable {
     var name: String
 }
 
+enum TimelineMath {
+    /// Quantize pointer-driven edits to real source-frame boundaries. Unknown or
+    /// malformed frame rates fall back to millisecond precision.
+    static func snappedTime(_ time: Double, fps: Double, duration: Double) -> Double {
+        guard time.isFinite, duration.isFinite, duration > 0 else { return 0 }
+        let clamped = min(max(time, 0), duration)
+        guard fps.isFinite, fps > 0 else { return (clamped * 1_000).rounded() / 1_000 }
+        return min(max((clamped * fps).rounded() / fps, 0), duration)
+    }
+}
+
+enum MarkerNavigation {
+    /// Ignore a marker at the current playhead so repeated navigation always
+    /// advances. Invalid legacy marker values are skipped defensively.
+    static func previous(in markers: [TimelineMarker], from time: Double,
+                         tolerance: Double = 0.001) -> Double? {
+        let current = time.isFinite ? time : 0
+        let epsilon = max(tolerance.isFinite ? tolerance : 0.001, 0)
+        return markers.lazy.map(\.time)
+            .filter { $0.isFinite && $0 < current - epsilon }
+            .max()
+    }
+
+    static func next(in markers: [TimelineMarker], from time: Double,
+                     tolerance: Double = 0.001) -> Double? {
+        let current = time.isFinite ? time : 0
+        let epsilon = max(tolerance.isFinite ? tolerance : 0.001, 0)
+        return markers.lazy.map(\.time)
+            .filter { $0.isFinite && $0 > current + epsilon }
+            .min()
+    }
+}
+
 /// Everything the user has done to one clip.
 struct EditPlan: Equatable, Codable {
     var inPoint: Double = 0
@@ -38,10 +121,48 @@ struct EditPlan: Equatable, Codable {
     var cuts: [CutRange] = []
     var speedZones: [SpeedZone] = []
     var music: MusicTrack? = nil
+    var sourceAudio: SourceAudioSettings? = nil
+    /// `title` preserves projects written before multi-title support.
+    var title: TitleOverlay? = nil
+    var titles: [TitleOverlay]? = nil
     var markers: [TimelineMarker] = []
 
+    var titleOverlays: [TitleOverlay] {
+        if let titles, !titles.isEmpty { return titles }
+        return title.map { [$0] } ?? []
+    }
+
     var isDefault: Bool {
-        inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty && music == nil
+        inPoint == 0 && outPoint == nil && cuts.isEmpty && speedZones.isEmpty
+            && music == nil && (sourceAudio?.isDefault ?? true)
+            && titleOverlays.isEmpty
+    }
+
+    /// Trim around a moment without exceeding the source. Near either edge the
+    /// window slides to preserve the requested length where possible.
+    mutating func setHighlight(around time: Double, length: Double, duration: Double) {
+        guard duration.isFinite, duration > 0, length.isFinite, length > 0 else { return }
+        let window = min(length, duration)
+        let center = min(max(time.isFinite ? time : 0, 0), duration)
+        var start = center - window / 2
+        var end = center + window / 2
+        if start < 0 {
+            end -= start
+            start = 0
+        }
+        if end > duration {
+            start -= end - duration
+            end = duration
+        }
+        inPoint = max(0, start)
+        outPoint = min(duration, end)
+    }
+
+    /// Restore the full source range without discarding cuts, markers, audio,
+    /// titles, or speed work that belongs to other editor tools.
+    mutating func resetTrim() {
+        inPoint = 0
+        outPoint = nil
     }
 
     /// Returns a safe, deterministic version of an edit before it is rendered.
@@ -101,6 +222,26 @@ struct EditPlan: Equatable, Codable {
         } else {
             result.music = nil
         }
+        if var audio = sourceAudio {
+            audio.volume = min(max(audio.volume.isFinite ? audio.volume : 1, 0), 1)
+            audio.fadeIn = max(audio.fadeIn.isFinite ? audio.fadeIn : 0, 0)
+            audio.fadeOut = max(audio.fadeOut.isFinite ? audio.fadeOut : 0, 0)
+            result.sourceAudio = audio.isDefault ? nil : audio
+        } else {
+            result.sourceAudio = nil
+        }
+        result.title = nil
+        let cleanedTitles = titleOverlays.compactMap { overlay -> TitleOverlay? in
+            var cleaned = overlay
+            cleaned.text = String(overlay.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix(200))
+            cleaned.start = min(max(overlay.start.isFinite ? overlay.start : result.inPoint,
+                                    result.inPoint), rangeEnd)
+            cleaned.end = min(max(overlay.end.isFinite ? overlay.end : cleaned.start,
+                                  cleaned.start), rangeEnd)
+            return cleaned.text.isEmpty || cleaned.end - cleaned.start < 0.05 ? nil : cleaned
+        }
+        result.titles = cleanedTitles.isEmpty ? nil : cleanedTitles
         return result
     }
 
@@ -255,7 +396,9 @@ enum FilterGraphBuilder {
     /// Build the -filter_complex for one clip's edit plan.
     /// Input 0 is the clip; input 1 (optional) is the music file.
     static func build(plan: EditPlan, duration: Double, sourceHasAudio: Bool,
-                      fixColorRange: Bool, outputVideoFilter: String? = nil) -> Graph {
+                      fixColorRange: Bool, outputVideoFilter: String? = nil,
+                      titleInputIndices: [Int] = [], sourceInputIndex: Int = 0,
+                      musicInputIndex: Int = 1, labelPrefix: String = "") -> Graph {
         let plan = plan.sanitized(duration: duration)
         let segs = plan.resolvedSegments(duration: duration)
         precondition(!segs.isEmpty, "empty edit")
@@ -264,36 +407,57 @@ enum FilterGraphBuilder {
         var lines: [String] = []
         var vLabels: [String] = []
         var aLabels: [String] = []
-        let wantOriginalAudio = sourceHasAudio && !(plan.music?.muteOriginal ?? false)
+        let label = { (name: String) in "\(labelPrefix)\(name)" }
+        let wantOriginalAudio = sourceHasAudio
+            && !(plan.music?.muteOriginal ?? false)
+            && !(plan.sourceAudio?.isMuted ?? false)
 
         for (i, seg) in segs.enumerated() {
-            let v = "v\(i)"
-            lines.append(String(format: "[0:v]trim=start=%.4f:end=%.4f,setpts=(PTS-STARTPTS)/%.5f[\(v)]",
+            let v = label("v\(i)")
+            lines.append(String(format: "[\(sourceInputIndex):v]trim=start=%.4f:end=%.4f,setpts=(PTS-STARTPTS)/%.5f[\(v)]",
                                 seg.start, seg.end, seg.speed))
             vLabels.append("[\(v)]")
             if wantOriginalAudio {
-                let a = "a\(i)"
-                lines.append(String(format: "[0:a]atrim=start=%.4f:end=%.4f,asetpts=PTS-STARTPTS,%@[\(a)]",
+                let a = label("a\(i)")
+                lines.append(String(format: "[\(sourceInputIndex):a]atrim=start=%.4f:end=%.4f,asetpts=PTS-STARTPTS,%@[\(a)]",
                                     seg.start, seg.end, atempoChain(seg.speed)))
                 aLabels.append("[\(a)]")
             }
         }
 
-        var vOut = "vcat"
+        var vOut = label("vcat")
         if segs.count == 1 {
             vOut = String(vLabels[0].dropFirst().dropLast())
         } else {
-            lines.append("\(vLabels.joined())concat=n=\(segs.count):v=1:a=0[vcat]")
+            lines.append("\(vLabels.joined())concat=n=\(segs.count):v=1:a=0[\(vOut)]")
         }
         if fixColorRange {
             // The one provably wrong thing about HDZero recordings: full-range video
             // most players treat as limited. Fix the range, touch nothing else.
-            lines.append("[\(vOut)]scale=in_range=pc:out_range=tv[vfix]")
-            vOut = "vfix"
+            let fixed = label("vfix")
+            lines.append("[\(vOut)]scale=in_range=pc:out_range=tv[\(fixed)]")
+            vOut = fixed
         }
         if let outputVideoFilter {
-            lines.append("[\(vOut)]\(outputVideoFilter)[vdelivery]")
-            vOut = "vdelivery"
+            let delivery = label("vdelivery")
+            lines.append("[\(vOut)]\(outputVideoFilter)[\(delivery)]")
+            vOut = delivery
+        }
+        for (index, pair) in zip(plan.titleOverlays, titleInputIndices).enumerated() {
+            let (title, titleInputIndex) = pair
+            let start = plan.outputTime(forSource: title.start, duration: duration)
+            let end = plan.outputTime(forSource: title.end, duration: duration)
+            let y: String
+            switch title.position {
+            case .top: y = "H*0.08"
+            case .center: y = "(H-h)/2"
+            case .bottom: y = "H-h-H*0.08"
+            }
+            let titleLabel = label("vtitle\(index)")
+            lines.append(String(
+                format: "[%@][%d:v]overlay=x=(W-w)/2:y=%@:enable='between(t,%.4f,%.4f)':eof_action=repeat:shortest=1[%@]",
+                vOut, titleInputIndex, y, start, end, titleLabel))
+            vOut = titleLabel
         }
 
         var aOut: String? = nil
@@ -301,8 +465,25 @@ enum FilterGraphBuilder {
             if aLabels.count == 1 {
                 aOut = String(aLabels[0].dropFirst().dropLast())
             } else {
-                lines.append("\(aLabels.joined())concat=n=\(aLabels.count):v=0:a=1[acat]")
-                aOut = "acat"
+                let concatenated = label("acat")
+                lines.append("\(aLabels.joined())concat=n=\(aLabels.count):v=0:a=1[\(concatenated)]")
+                aOut = concatenated
+            }
+            if let audio = plan.sourceAudio, !audio.isDefault, let existing = aOut {
+                let fadeIn = min(audio.fadeIn, outDur)
+                let fadeOut = min(audio.fadeOut, outDur)
+                let fadeOutStart = max(0, outDur - fadeOut)
+                var filters = [String(format: "volume=%.3f", audio.volume)]
+                if fadeIn > 0.01 {
+                    filters.append(String(format: "afade=t=in:d=%.3f", fadeIn))
+                }
+                if fadeOut > 0.01 {
+                    filters.append(String(format: "afade=t=out:st=%.3f:d=%.3f",
+                                          fadeOutStart, fadeOut))
+                }
+                let source = label("asource")
+                lines.append("[\(existing)]\(filters.joined(separator: ","))[\(source)]")
+                aOut = source
             }
         }
 
@@ -311,13 +492,14 @@ enum FilterGraphBuilder {
             needsMusic = true
             let fadeOutStart = max(0, outDur - music.fadeOut)
             lines.append(String(
-                format: "[1:a]atrim=0:%.3f,asetpts=PTS-STARTPTS,volume=%.3f,afade=t=in:d=%.2f,afade=t=out:st=%.3f:d=%.2f[music]",
+                format: "[\(musicInputIndex):a]atrim=0:%.3f,asetpts=PTS-STARTPTS,volume=%.3f,afade=t=in:d=%.2f,afade=t=out:st=%.3f:d=%.2f[\(label("music"))]",
                 outDur, music.volume, music.fadeIn, fadeOutStart, music.fadeOut))
             if let existing = aOut {
-                lines.append("[\(existing)][music]amix=inputs=2:duration=first:normalize=0[amix]")
-                aOut = "amix"
+                let mixed = label("amix")
+                lines.append("[\(existing)][\(label("music"))]amix=inputs=2:duration=first:normalize=0[\(mixed)]")
+                aOut = mixed
             } else {
-                aOut = "music"
+                aOut = label("music")
             }
         }
 

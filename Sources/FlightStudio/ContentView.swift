@@ -4,6 +4,7 @@ import AVKit
 struct ContentView: View {
     @EnvironmentObject var store: ClipStore
     @EnvironmentObject var queue: ExportQueue
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var player = PlayerController()
 
     var body: some View {
@@ -69,6 +70,29 @@ struct ContentView: View {
                 store.restoreLastSourceFolder()
             }
         }
+        .dropDestination(for: URL.self) { urls, _ in
+            store.openImportedURLs(urls)
+        } isTargeted: { targeted in
+            if targeted {
+                store.statusMessage = "Drop to scan recordings"
+            } else if store.statusMessage == "Drop to scan recordings" {
+                store.statusMessage = "\(store.clips.count) clip\(store.clips.count == 1 ? "" : "s")"
+            }
+        }
+        .onOpenURL { url in
+            _ = store.openImportedURLs([url])
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { ClipLibraryMetadataIndex.shared.flush() }
+        }
+        .alert("Couldn’t open edit project", isPresented: Binding(
+            get: { store.projectOpenError != nil },
+            set: { if !$0 { store.projectOpenError = nil } }
+        )) {
+            Button("OK", role: .cancel) { store.projectOpenError = nil }
+        } message: {
+            Text(store.projectOpenError ?? "")
+        }
     }
 }
 
@@ -114,7 +138,7 @@ struct StatusBar: View {
                 Text(queue.currentMessage)
             }
             if store.previewCacheBytes > 0 {
-                Text("Previews: \(byteString(store.previewCacheBytes))")
+                Text("Media cache: \(byteString(store.previewCacheBytes))")
                 Button("Clear") { store.clearPreviewCache() }
                     .controlSize(.mini)
             }
@@ -163,6 +187,10 @@ struct ClipListView: View {
             }
             .padding(8)
             TextField("Filter clips", text: $store.searchQuery)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
+            TextField("Filter tags", text: $store.tagFilter)
                 .textFieldStyle(.roundedBorder)
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
@@ -237,6 +265,7 @@ struct ClipListView: View {
 struct ClipRow: View {
     @ObservedObject var clip: Clip
     @EnvironmentObject var store: ClipStore
+    @State private var newTag = ""
 
     var body: some View {
         HStack(spacing: 10) {
@@ -272,6 +301,12 @@ struct ClipRow: View {
                             .foregroundStyle(.orange)
                             .help("Has edits")
                     }
+                    if !clip.highlights.isEmpty {
+                        Label("\(clip.highlights.count)", systemImage: "sparkles.rectangle.stack")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .help("\(clip.highlights.count) saved highlight\(clip.highlights.count == 1 ? "" : "s")")
+                    }
                 }
                 if let info = clip.info {
                     Text("\(format(seconds: info.duration)) · \(info.width)×\(info.height) \(Int(info.fps.rounded()))")
@@ -285,6 +320,29 @@ struct ClipRow: View {
                         .lineLimit(1)
                 } else {
                     Text("Reading…").font(.caption).foregroundStyle(.tertiary)
+                }
+                HStack(spacing: 4) {
+                    ForEach(clip.tags, id: \.self) { tag in
+                        Button {
+                            store.removeTag(tag, from: clip)
+                        } label: {
+                            Text(tag)
+                                .font(.caption2)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(.quaternary, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Remove tag \(tag)")
+                    }
+                    TextField("Add tag", text: $newTag)
+                        .textFieldStyle(.plain)
+                        .font(.caption2)
+                        .frame(width: 72)
+                        .onSubmit {
+                            store.addTag(newTag, to: clip)
+                            newTag = ""
+                        }
                 }
             }
             Spacer(minLength: 4)

@@ -745,7 +745,10 @@ final class ClipStore: ObservableObject {
             .map { (clip: $0, cachedInfo: $0.info) }
         guard !pending.isEmpty else { return }
         let needsCacheFlush = pending.contains { $0.cachedInfo == nil }
-        Task.detached(priority: .utility) { [weak self] in
+        let refreshPresentation: @MainActor @Sendable () -> Void = { [weak self] in
+            self?.schedulePresentationRefresh()
+        }
+        Task.detached(priority: .utility) {
             await withTaskGroup(of: Void.self) { group in
                 var iterator = pending.makeIterator()
                 func addNext(_ group: inout TaskGroup<Void>) -> Bool {
@@ -762,7 +765,7 @@ final class ClipStore: ObservableObject {
                         await MainActor.run {
                             clip.info = info
                             clip.thumbnail = thumbnailURL.flatMap(NSImage.init(contentsOf:))
-                            self?.schedulePresentationRefresh()
+                            refreshPresentation()
                         }
                     }
                     return true

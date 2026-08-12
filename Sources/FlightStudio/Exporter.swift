@@ -438,6 +438,16 @@ enum ExportSourceRelinker {
                     stderr: "The selected video does not match the original recording's duration and resolution.")
             }
         }
+        let editBoundaryTimes = [source.edit.inPoint]
+            + (source.edit.outPoint.map { [$0] } ?? [])
+            + source.edit.cuts.flatMap { [$0.start, $0.end] }
+            + source.edit.speedZones.flatMap { [$0.start, $0.end] }
+            + source.edit.titleOverlays.flatMap { [$0.start, $0.end] }
+        guard editBoundaryTimes.allSatisfy({ $0.isFinite && $0 <= info.duration + 0.05 }) else {
+            throw FFmpeg.ProcessError(
+                command: "relink export",
+                stderr: "The replacement is shorter than the frozen queued edit.")
+        }
         if let error = source.edit.validationError(duration: info.duration) {
             throw FFmpeg.ProcessError(
                 command: "relink export",

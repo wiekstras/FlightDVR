@@ -22,7 +22,10 @@ it, and add eased speed ramps.
   in-memory index immediately while whole-library serialization is batched on a
   utility queue and flushed at macOS lifecycle boundaries. Sorted, filtered and
   day-grouped presentation state is cached and invalidated explicitly, avoiding
-  repeated full-library sorting during unrelated SwiftUI updates.
+  repeated full-library sorting during unrelated SwiftUI updates. Filesystem
+  identities preserve favorites, tags, highlights and edit recovery when a
+  recording is renamed or moved on the same volume; legacy path-only records
+  upgrade automatically when scanned.
 - **Manage** — move clips to the Trash (always recoverable, never hard-deleted)
   from the right-click menu, the Delete key, or Clips → Move Ticked to Trash.
 - **Preview natively** — `.ts` files are losslessly remuxed into a cache with the

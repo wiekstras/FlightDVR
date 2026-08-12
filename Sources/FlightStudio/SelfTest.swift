@@ -328,6 +328,30 @@ enum SelfTest {
               reloadedIndex.record(for: indexedURL) == indexedRecord else {
             throw Failure("library metadata index did not persist or reload records")
         }
+
+        let identitySource = workDir.appendingPathComponent("identity-source.ts")
+        let renamedSource = workDir.appendingPathComponent("identity-renamed.ts")
+        try? FileManager.default.removeItem(at: identitySource)
+        try? FileManager.default.removeItem(at: renamedSource)
+        try Data("stable recording identity".utf8).write(to: identitySource)
+        guard let originalIdentity = Clip.libraryIdentity(for: identitySource) else {
+            throw Failure("could not derive a recording filesystem identity")
+        }
+        let identityRecord = ClipLibraryRecord(
+            favorite: true, tags: ["renamed"], edit: EditPlan(inPoint: 2, outPoint: 3))
+        metadataIndex.save(identityRecord, for: identitySource, identity: originalIdentity)
+        metadataIndex.flush()
+        try FileManager.default.moveItem(at: identitySource, to: renamedSource)
+        guard Clip.libraryIdentity(for: renamedSource) == originalIdentity,
+              metadataIndex.record(for: renamedSource, identity: originalIdentity) == identityRecord else {
+            throw Failure("renaming a recording lost its library metadata")
+        }
+        metadataIndex.flush()
+        let renamedReload = ClipLibraryMetadataIndex(defaults: isolatedDefaults, key: metadataKey)
+        guard renamedReload.record(for: renamedSource, identity: originalIdentity) == identityRecord,
+              renamedReload.recordCount == 1_001 else {
+            throw Failure("renamed recording metadata migration was not durable")
+        }
         print("library metadata index ok")
 
         // Library presentation is derived once per invalidation rather than on

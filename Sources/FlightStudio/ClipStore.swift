@@ -17,12 +17,19 @@ struct ClipLibraryRecord: Codable, Equatable {
 final class ClipLibraryMetadataIndex: @unchecked Sendable {
     static let shared = ClipLibraryMetadataIndex()
 
+    private struct Archive: Codable {
+        var version = 2
+        var records: [String: ClipLibraryRecord]
+        var pathsByIdentity: [String: String]
+    }
+
     private let defaults: UserDefaults
     private let key: String
     private let saveDelay: TimeInterval
     private let persistenceQueue: DispatchQueue
     private let lock = NSLock()
     private var records: [String: ClipLibraryRecord]
+    private var pathsByIdentity: [String: String]
     private var saveWorkItem: DispatchWorkItem?
     private var writeCount = 0
     private var revision = 0
@@ -35,27 +42,70 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
         self.saveDelay = max(saveDelay, 0)
         self.persistenceQueue = DispatchQueue(
             label: "studio.dvr.library-metadata.\(UUID().uuidString)", qos: .utility)
-        if let data = defaults.data(forKey: key) {
+        if let data = defaults.data(forKey: key),
+           let archive = try? JSONDecoder().decode(Archive.self, from: data),
+           archive.version == 2 {
+            records = archive.records
+            pathsByIdentity = archive.pathsByIdentity
+        } else if let data = defaults.data(forKey: key) {
+            // Transparently upgrade the original path-keyed dictionary.
             records = (try? JSONDecoder().decode([String: ClipLibraryRecord].self, from: data)) ?? [:]
+            pathsByIdentity = [:]
         } else {
             records = [:]
+            pathsByIdentity = [:]
         }
     }
 
-    func record(for url: URL) -> ClipLibraryRecord {
+    func record(for url: URL, identity: String? = nil) -> ClipLibraryRecord {
+        let path = url.standardizedFileURL.path
+        var saveItem: DispatchWorkItem?
         lock.lock()
-        defer { lock.unlock() }
-        return records[url.standardizedFileURL.path] ?? ClipLibraryRecord()
+        let result: ClipLibraryRecord
+        if let existing = records[path] {
+            result = existing
+            if let identity, pathsByIdentity[identity] != path {
+                pathsByIdentity[identity] = path
+                saveItem = scheduleSaveLocked()
+            }
+        } else if let identity, let oldPath = pathsByIdentity[identity],
+                  let recovered = records[oldPath] {
+            records[path] = recovered
+            if oldPath != path { records[oldPath] = nil }
+            pathsByIdentity[identity] = path
+            result = recovered
+            saveItem = scheduleSaveLocked()
+        } else {
+            result = ClipLibraryRecord()
+        }
+        lock.unlock()
+        enqueue(saveItem)
+        return result
     }
 
-    func save(_ record: ClipLibraryRecord, for url: URL) {
+    func save(_ record: ClipLibraryRecord, for url: URL, identity: String? = nil) {
+        let path = url.standardizedFileURL.path
         lock.lock()
-        records[url.standardizedFileURL.path] = record
+        if let identity, let oldPath = pathsByIdentity[identity], oldPath != path {
+            records[oldPath] = nil
+        }
+        records[path] = record
+        if let identity { pathsByIdentity[identity] = path }
+        let item = scheduleSaveLocked()
+        lock.unlock()
+        enqueue(item)
+    }
+
+    private func scheduleSaveLocked() -> DispatchWorkItem {
         revision += 1
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in self?.persistCurrentRecords() }
         saveWorkItem = item
-        lock.unlock()
+        return item
+    }
+
+    private func enqueue(_ item: DispatchWorkItem?) {
+        guard let item else { return }
         persistenceQueue.asyncAfter(deadline: .now() + saveDelay, execute: item)
     }
 
@@ -75,7 +125,7 @@ final class ClipLibraryMetadataIndex: @unchecked Sendable {
             lock.unlock()
             return
         }
-        let snapshot = records
+        let snapshot = Archive(records: records, pathsByIdentity: pathsByIdentity)
         let snapshotRevision = revision
         lock.unlock()
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
@@ -199,6 +249,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     private var restoringEdit = false
     private var editSaveWorkItem: DispatchWorkItem?
     private let isLibraryBacked: Bool
+    private let libraryIdentity: String?
 
     let fileDate: Date           // the filesystem's story
     let parsedDate: Date?        // a date found in the filename, which we trust more
@@ -208,15 +259,18 @@ final class Clip: ObservableObject, Identifiable, Hashable {
     }
 
     init(url: URL, fileDate: Date, isLibraryBacked: Bool = true,
-         editOverride: EditPlan? = nil) {
+         editOverride: EditPlan? = nil, libraryIdentity: String? = nil) {
         self.url = url
         self.id = url
         self.isLibraryBacked = isLibraryBacked
+        self.libraryIdentity = isLibraryBacked
+            ? (libraryIdentity ?? Self.libraryIdentity(for: url)) : nil
         self.relativeName = url.lastPathComponent
         self.fileDate = fileDate
         self.parsedDate = Clip.parseDate(from: url.lastPathComponent)
         let record = isLibraryBacked
-            ? ClipLibraryMetadataIndex.shared.record(for: url) : ClipLibraryRecord()
+            ? ClipLibraryMetadataIndex.shared.record(for: url, identity: self.libraryIdentity)
+            : ClipLibraryRecord()
         self.favorite = record.favorite
         self.tags = record.tags
         self.edit = editOverride ?? record.edit ?? EditPlan()
@@ -318,7 +372,7 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         ClipLibraryMetadataIndex.shared.save(
             ClipLibraryRecord(favorite: favorite, tags: tags, edit: savedEdit,
                               highlights: highlights.isEmpty ? nil : highlights),
-            for: url
+            for: url, identity: libraryIdentity
         )
     }
 
@@ -369,6 +423,17 @@ final class Clip: ObservableObject, Identifiable, Hashable {
         return (attrs?[.creationDate] ?? attrs?[.modificationDate]) as? Date ?? .distantPast
     }
 
+    /// Stable across Finder renames and moves on the same filesystem. Including
+    /// creation time prevents an inode reused by a later recording from
+    /// inheriting the deleted file's edits.
+    nonisolated static func libraryIdentity(for url: URL) -> String? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber else { return nil }
+        let created = (attributes[.creationDate] as? Date)?.timeIntervalSince1970 ?? 0
+        return "v1:\(device.uint64Value):\(inode.uint64Value):\(Int64(created * 1_000))"
+    }
+
     static func == (lhs: Clip, rhs: Clip) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
@@ -385,6 +450,7 @@ struct ScannedVideoFile: Equatable, Sendable {
     var url: URL
     var fileDate: Date
     var cachedInfo: ClipInfo?
+    var libraryIdentity: String?
 }
 
 enum TimelineFilmstripBuilder {
@@ -562,7 +628,8 @@ final class ClipStore: ObservableObject {
         findVideoFiles(in: folder, maxDepth: maxDepth).map {
             let key = mediaCacheKey(for: $0)
             return ScannedVideoFile(url: $0, fileDate: Clip.readFileDate(for: $0),
-                                    cachedInfo: MediaMetadataCache.shared.info(for: key))
+                                    cachedInfo: MediaMetadataCache.shared.info(for: key),
+                                    libraryIdentity: Clip.libraryIdentity(for: $0))
         }
     }
 
@@ -690,7 +757,9 @@ final class ClipStore: ObservableObject {
                 self.activeScanID = nil
                 let existing = Dictionary(uniqueKeysWithValues: self.clips.map { ($0.url, $0) })
                 self.clips = files.map { file in
-                    let clip = existing[file.url] ?? Clip(url: file.url, fileDate: file.fileDate)
+                    let clip = existing[file.url] ?? Clip(
+                        url: file.url, fileDate: file.fileDate,
+                        libraryIdentity: file.libraryIdentity)
                     if clip.info == nil { clip.info = file.cachedInfo }
                     clip.relativeName = file.url.path.hasPrefix(folder.path + "/")
                         ? String(file.url.path.dropFirst(folder.path.count + 1))

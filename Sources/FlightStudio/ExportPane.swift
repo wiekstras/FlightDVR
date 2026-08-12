@@ -466,12 +466,31 @@ struct QueueRow: View {
                     }
                     .buttonStyle(.plain)
                 case .done:
-                    Button {
-                        NSWorkspace.shared.activateFileViewerSelecting([job.outputURL])
-                    } label: {
-                        Image(systemName: "magnifyingglass.circle")
+                    if job.outputActionsAvailable {
+                        Button {
+                            NSWorkspace.shared.open(job.outputURL)
+                        } label: {
+                            Image(systemName: "play.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open export")
+                        ShareLink(item: job.outputURL) {
+                            Image(systemName: "square.and.arrow.up.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Share export")
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([job.outputURL])
+                        } label: {
+                            Image(systemName: "magnifyingglass.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .help("Reveal in Finder")
+                    } else {
+                        Image(systemName: "questionmark.folder")
+                            .foregroundStyle(.red)
+                            .help("The completed export is missing or no longer verified")
                     }
-                    .buttonStyle(.plain)
                 case .cancelled, .failed:
                     Button {
                         queue.retry(job)
@@ -492,6 +511,11 @@ struct QueueRow: View {
                     .foregroundStyle(.red)
                     .lineLimit(3)
             }
+            if job.state == .done, !job.outputActionsAvailable {
+                Text("Export file is missing or no longer verified.")
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
         }
         .padding(.vertical, 5)
         .overlay(alignment: .bottom) { Divider().opacity(0.5) }
@@ -501,7 +525,10 @@ struct QueueRow: View {
         switch job.state {
         case .waiting: Image(systemName: "clock").foregroundStyle(.secondary)
         case .running: ProgressView().controlSize(.mini)
-        case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        case .done:
+            Image(systemName: job.outputActionsAvailable
+                  ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(job.outputActionsAvailable ? .green : .red)
         case .cancelled: Image(systemName: "slash.circle").foregroundStyle(.secondary)
         case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
         }

@@ -72,6 +72,9 @@ it, and add eased speed ramps.
 
   Apple VideoToolbox hardware encoding is offered when a *test encode* proves it
   works — not when ffmpeg merely claims to support it.
+  Verified results can be opened, revealed in Finder, or sent through the native
+  macOS share sheet directly from the queue; missing outputs lose those actions
+  and are shown as an explicit error instead of a stale success.
 - **Deliver** — Social exports can target TikTok, Instagram Reels, YouTube
   Shorts (9:16), Instagram posts (1:1 or 4:5), or YouTube (16:9). Choose **Fit**
   to preserve the entire FPV frame or **Fill** for an edge-to-edge social crop,

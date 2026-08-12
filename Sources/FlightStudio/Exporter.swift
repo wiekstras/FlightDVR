@@ -227,6 +227,15 @@ enum ExportOutput {
     }
 }
 
+enum CompletedExportActions {
+    static func isAvailable(state: ExportState, outputInfo: ClipInfo?,
+                            fileExists: Bool) -> Bool {
+        guard state == .done, fileExists, let outputInfo else { return false }
+        return outputInfo.duration > 0.05 && outputInfo.width > 0
+            && outputInfo.height > 0 && outputInfo.fileSize > 0
+    }
+}
+
 enum ExportTemporaryFiles {
     static func belongsToJob(_ url: URL, jobID: UUID) -> Bool {
         let id = jobID.uuidString
@@ -375,6 +384,11 @@ final class ExportJob: ObservableObject, Identifiable {
     var clip: Clip { clips[0] }
     var isStitch: Bool { clips.count > 1 }
     var displayName: String { isStitch ? "Sequence (\(clips.count) clips)" : clip.name }
+    var outputActionsAvailable: Bool {
+        CompletedExportActions.isAvailable(
+            state: state, outputInfo: outputInfo,
+            fileExists: FileManager.default.fileExists(atPath: outputURL.path))
+    }
 
     var stagingURL: URL {
         ExportOutput.stagingURL(for: outputURL, jobID: id)

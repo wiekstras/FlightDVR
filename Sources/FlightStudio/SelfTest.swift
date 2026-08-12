@@ -589,6 +589,16 @@ enum SelfTest {
         guard rejectedUnknownJournal else {
             throw Failure("unsupported export queue journal version was accepted")
         }
+        guard CompletedExportActions.isAvailable(
+                state: .done, outputInfo: info, fileExists: true),
+              !CompletedExportActions.isAvailable(
+                state: .waiting, outputInfo: info, fileExists: true),
+              !CompletedExportActions.isAvailable(
+                state: .done, outputInfo: nil, fileExists: true),
+              !CompletedExportActions.isAvailable(
+                state: .done, outputInfo: info, fileExists: false) else {
+            throw Failure("completed export actions accepted an unavailable output")
+        }
 
         // Final outputs are promoted only after a complete staging file exists,
         // and replacing an export never exposes half-written bytes.

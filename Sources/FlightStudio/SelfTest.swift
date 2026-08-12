@@ -944,6 +944,51 @@ enum SelfTest {
             throw Failure("publishing retry eligibility did not preserve terminal destinations")
         }
 
+        var assetDraft = recoveryDraft
+        assetDraft.thumbnailURL = waveformOut
+        let assetJobID = UUID()
+        let importedAssetDraft = try PublishAssetStore.importingThumbnail(
+            in: assetDraft, jobID: assetJobID, queueURL: journalURL)
+        guard let durableThumbnail = importedAssetDraft.thumbnailURL,
+              durableThumbnail != waveformOut,
+              durableThumbnail.path.hasPrefix(PublishAssetStore.root(beside: journalURL).path),
+              NSImage(contentsOf: durableThumbnail) != nil else {
+            throw Failure("publish queue did not import an external thumbnail into durable storage")
+        }
+        PublishAssetStore.removeAssets(for: assetJobID, queueURL: journalURL)
+        guard !FileManager.default.fileExists(atPath: durableThumbnail.path) else {
+            throw Failure("removing a publish job did not clean up its managed thumbnail")
+        }
+        let exportAssetJobID = UUID()
+        let exportJournalURL = workDir.appendingPathComponent("asset-export-queue.json")
+        let exportOwnedDraft = try PublishAssetStore.importingThumbnail(
+            in: assetDraft, jobID: exportAssetJobID, queueURL: exportJournalURL)
+        guard let exportOwnedThumbnail = exportOwnedDraft.thumbnailURL,
+              FileManager.default.fileExists(atPath: exportOwnedThumbnail.path) else {
+            throw Failure("export-to-publish handoff did not secure its thumbnail during encoding")
+        }
+        PublishAssetStore.removeAssets(for: exportAssetJobID, queueURL: exportJournalURL)
+        let assetQueueURL = workDir.appendingPathComponent("asset-publish-queue.json")
+        let assetQueue = PublishQueue(persistenceURL: assetQueueURL)
+        let assetExport = ExportJob(
+            clips: [Clip(url: src, fileDate: Date(), isLibraryBacked: false)],
+            settings: socialStitchSettings, outputURL: socialStitchOut,
+            state: .done, progress: 1, outputInfo: socialStitchInfo)
+        var queuedAssetDraft = assetDraft
+        queuedAssetDraft.platforms = [.youtube]
+        let assetEnqueue = assetQueue.enqueueJob(export: assetExport, draft: queuedAssetDraft)
+        guard let assetJob = assetEnqueue.job,
+              let queuedThumbnail = assetJob.draft.thumbnailURL,
+              queuedThumbnail != waveformOut,
+              FileManager.default.fileExists(atPath: queuedThumbnail.path) else {
+            throw Failure("publishing queue ingress did not take ownership of its thumbnail")
+        }
+        assetQueue.remove(assetJob)
+        guard !FileManager.default.fileExists(atPath: queuedThumbnail.path) else {
+            throw Failure("publishing queue removal left its managed thumbnail behind")
+        }
+        print("durable publishing assets ok")
+
         // A cancelled provider can complete after its replacement retry. Only
         // the current attempt is allowed to mutate queue state.
         var attempts = PublishAttemptRegistry<String>()

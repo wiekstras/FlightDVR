@@ -646,7 +646,7 @@ final class ExportQueue: ObservableObject {
 
     func enqueueForPublishing(clip: Clip, settings: ExportSettings,
                               draft: PublishDraft) -> [PublishIssue] {
-        let issues = PublishValidator.validate(draft: draft, settings: settings)
+        var issues = PublishValidator.validate(draft: draft, settings: settings)
         guard !issues.contains(where: { $0.severity == .error }) else { return issues }
         let folder = settings.resolvedOutputFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -657,8 +657,19 @@ final class ExportQueue: ObservableObject {
         // Freeze the non-destructive edit now. The creator can keep working
         // without changing an export that is already queued for publishing.
         let variant = Clip.exportVariant(from: clip, edit: clip.edit)
-        jobs.append(ExportJob(clips: [variant], settings: settings, outputURL: out,
-                              pendingPublishDraft: draft))
+        let jobID = UUID()
+        let durableDraft: PublishDraft
+        do {
+            durableDraft = try PublishAssetStore.importingThumbnail(
+                in: draft, jobID: jobID, queueURL: persistenceURL)
+        } catch {
+            issues.append(PublishIssue(
+                severity: .error,
+                message: "The thumbnail could not be secured for export: \(error.localizedDescription)"))
+            return issues
+        }
+        jobs.append(ExportJob(id: jobID, clips: [variant], settings: settings, outputURL: out,
+                              pendingPublishDraft: durableDraft))
         persist()
         start()
         return issues
@@ -713,15 +724,22 @@ final class ExportQueue: ObservableObject {
         if job.state == .running { job.cancelFlag = true }
         try? FileManager.default.removeItem(at: job.stagingURL)
         jobs.removeAll { $0.id == job.id }
+        PublishAssetStore.removeAssets(for: job.id, queueURL: persistenceURL)
         persist()
     }
 
     func clearFinished() {
+        for job in jobs where job.state == .done || job.state == .cancelled {
+            PublishAssetStore.removeAssets(for: job.id, queueURL: persistenceURL)
+        }
         jobs.removeAll { $0.state == .done || $0.state == .cancelled }
         persist()
     }
 
     func clearFailed() {
+        for job in jobs where job.state.isFailure {
+            PublishAssetStore.removeAssets(for: job.id, queueURL: persistenceURL)
+        }
         jobs.removeAll { $0.state.isFailure }
         persist()
     }
@@ -838,6 +856,7 @@ final class ExportQueue: ObservableObject {
         guard let draft = job.pendingPublishDraft, let publishHandoff,
               publishHandoff(job, draft) else { return }
         job.pendingPublishDraft = nil
+        PublishAssetStore.removeAssets(for: job.id, queueURL: persistenceURL)
         persist()
     }
 

@@ -91,6 +91,8 @@ it, and add eased speed ramps.
   Export and publishing journals each maintain an atomic sibling backup; a
   malformed primary is decoded from backup and repaired before any queued,
   completed, or partially uploaded destination can disappear.
+  Custom thumbnails are imported into job-owned Application Support storage,
+  so uploads remain retryable after removable or temporary sources disappear.
 - **Export & Publish handoff** — the current edit can be queued for social
   delivery in one action. DVR Studio freezes that edit, encodes and verifies it,
   then durably hands it to the publishing queue without blocking further edits;

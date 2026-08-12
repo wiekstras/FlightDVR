@@ -406,6 +406,44 @@ enum PublishQueueStore {
     }
 }
 
+/// External thumbnails may live on removable media or in temporary folders.
+/// Import them beside the durable queue before enqueueing so retries never
+/// depend on the original location remaining mounted.
+enum PublishAssetStore {
+    static func root(beside queueURL: URL) -> URL {
+        queueURL.deletingLastPathComponent().appendingPathComponent(
+            "publish-assets", isDirectory: true)
+    }
+
+    static func importingThumbnail(in draft: PublishDraft, jobID: UUID,
+                                   queueURL: URL) throws -> PublishDraft {
+        guard let source = draft.thumbnailURL else { return draft }
+        let ext = source.pathExtension.lowercased()
+        guard ["jpg", "jpeg", "png"].contains(ext) else {
+            throw FFmpeg.ProcessError(command: "stage publish assets",
+                                      stderr: "The thumbnail must be a JPEG or PNG image.")
+        }
+        let directory = root(beside: queueURL).appendingPathComponent(
+            jobID.uuidString, isDirectory: true)
+        let destination = directory.appendingPathComponent("thumbnail.\(ext)")
+        if source.standardizedFileURL != destination.standardizedFileURL {
+            let data = try Data(contentsOf: source)
+            try FileManager.default.createDirectory(at: directory,
+                                                    withIntermediateDirectories: true)
+            try data.write(to: destination, options: .atomic)
+        }
+        var imported = draft
+        imported.thumbnailURL = destination
+        return imported
+    }
+
+    static func removeAssets(for jobID: UUID, queueURL: URL) {
+        let directory = root(beside: queueURL).appendingPathComponent(
+            jobID.uuidString, isDirectory: true)
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
 /// Identifies the one upload attempt currently allowed to mutate a destination.
 /// Providers are external async systems and may return after cancellation; a
 /// late completion from an older attempt must never overwrite a newer retry.
@@ -501,15 +539,26 @@ final class PublishQueue: ObservableObject {
 
     func enqueueJob(export: ExportJob, draft: PublishDraft)
         -> (job: PublishJob?, issues: [PublishIssue]) {
-        let issues = PublishValidator.validate(
+        var issues = PublishValidator.validate(
             draft: draft, settings: export.settings, media: export.outputInfo,
             fileExists: FileManager.default.fileExists(atPath: export.outputURL.path))
         guard !issues.contains(where: { $0.severity == .error }) else { return (nil, issues) }
         if let existing = jobs.first(where: { $0.sourceExportID == export.id }) {
             return (existing, issues)
         }
-        let job = PublishJob(exportURL: export.outputURL, settings: export.settings,
-                             draft: draft, sourceExportID: export.id)
+        let jobID = UUID()
+        let durableDraft: PublishDraft
+        do {
+            durableDraft = try PublishAssetStore.importingThumbnail(
+                in: draft, jobID: jobID, queueURL: persistenceURL)
+        } catch {
+            issues.append(PublishIssue(
+                severity: .error,
+                message: "The thumbnail could not be secured for publishing: \(error.localizedDescription)"))
+            return (nil, issues)
+        }
+        let job = PublishJob(id: jobID, exportURL: export.outputURL, settings: export.settings,
+                             draft: durableDraft, sourceExportID: export.id)
         jobs.append(job)
         persist()
         return (job, issues)
@@ -541,6 +590,13 @@ final class PublishQueue: ObservableObject {
         }
         for platform in platforms {
             guard job.states[platform]?.canStart == true else { continue }
+            if platform == .youtube, let thumbnail = job.draft.thumbnailURL,
+               !FileManager.default.fileExists(atPath: thumbnail.path) {
+                job.states[platform] = .failed(
+                    "The job's thumbnail is missing. Remove this job and publish again with a new thumbnail.")
+                persist()
+                continue
+            }
             guard let provider = providers[platform] else { continue }
             let key = UploadKey(jobID: job.id, platform: platform)
             guard uploadTasks[key] == nil else { continue }
@@ -609,6 +665,7 @@ final class PublishQueue: ObservableObject {
             uploadAttempts.invalidate(key)
         }
         jobs.removeAll { $0.id == job.id }
+        PublishAssetStore.removeAssets(for: job.id, queueURL: persistenceURL)
         persist()
     }
 

@@ -98,7 +98,8 @@ it, and add eased speed ramps.
   controls with edited-duration and resolution checks before the job is queued.
   Every clip's frozen trims, cuts, speed work, titles and audio mix are rendered
   before concatenation; missing audio is padded with silence rather than dropping
-  sound from the entire sequence.
+  sound from the entire sequence. Social sequences preserve the selected platform
+  canvas, framing and two-pass target size, including ordered highlight reels.
 
 ## The colour fix
 

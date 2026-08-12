@@ -312,8 +312,11 @@ private struct SequenceComposer: View {
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
             }
-            if settings.preset == .social || settings.preset == .remux {
+            if settings.preset == .remux {
                 Text("Sequences use the Master H.264 preset because stitching requires a full encode.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if settings.preset == .social {
+                Text("The complete sequence will use the selected social canvas, framing and target size.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack {

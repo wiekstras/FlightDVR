@@ -559,7 +559,12 @@ enum SelfTest {
         let socialDiskEstimate = ExportDiskSpace.requiredBytes(
             clips: [ExportClipSnapshot(url: src, info: info, edit: plan)],
             settings: socialDiskSettings)
-        guard socialDiskEstimate == 92_750_000 else {
+        let socialSequenceDiskEstimate = ExportDiskSpace.requiredBytes(
+            clips: [ExportClipSnapshot(url: src, info: info, edit: plan),
+                    ExportClipSnapshot(url: src, info: info, edit: plan)],
+            settings: socialDiskSettings)
+        guard socialDiskEstimate == 92_750_000,
+              socialSequenceDiskEstimate == socialDiskEstimate else {
             throw Failure("social disk estimate did not track the target file size")
         }
         print("export disk-space preflight ok")
@@ -694,9 +699,13 @@ enum SelfTest {
         silentPlan.music = nil
         let stitchClips = [ExportClipSnapshot(url: src, info: info, edit: plan),
                            ExportClipSnapshot(url: src, info: silentInfo, edit: silentPlan)]
-        let stitchArgs = try StitchCommandBuilder.build(clips: stitchClips,
-                                                         settings: settings, output: stitchOut,
-                                                         jobID: stitchJobID)
+        let stitchCommands = try StitchCommandBuilder.build(clips: stitchClips,
+                                                             settings: settings, output: stitchOut,
+                                                             jobID: stitchJobID)
+        guard stitchCommands.count == 1 else {
+            throw Failure("master stitch unexpectedly required multiple passes")
+        }
+        let stitchArgs = stitchCommands[0]
         guard stitchArgs.contains(where: { $0.contains("concat=n=2:v=1:a=0") }),
               stitchArgs.contains(where: { $0.contains("[s0_v0]") && $0.contains("[s1_v0]") }),
               stitchArgs.contains(where: { $0.contains("anullsrc=r=48000") }),
@@ -709,6 +718,39 @@ enum SelfTest {
             throw Failure("stitch export ignored edits or lost audio: \(stitchInfo)")
         }
         print("edited stitch ok: \(String(format: "%.2f", stitchInfo.duration))s")
+
+        // Social sequences retain the selected delivery canvas and two-pass
+        // target-size encode instead of silently becoming a Master export.
+        var socialStitchSettings = settings
+        socialStitchSettings.preset = .social
+        socialStitchSettings.socialProfile = .instagramSquare
+        socialStitchSettings.socialFraming = .fill
+        socialStitchSettings.socialTargetMB = 1
+        var shortEdit = EditPlan()
+        shortEdit.outPoint = 0.5
+        let shortClips = [ExportClipSnapshot(url: src, info: info, edit: shortEdit),
+                          ExportClipSnapshot(url: src, info: info, edit: shortEdit)]
+        let socialStitchOut = workDir.appendingPathComponent("social-stitched.mp4")
+        let socialStitchJobID = UUID()
+        defer { ExportTemporaryFiles.cleanup(jobID: socialStitchJobID) }
+        let socialStitchCommands = try StitchCommandBuilder.build(
+            clips: shortClips, settings: socialStitchSettings,
+            output: socialStitchOut, jobID: socialStitchJobID)
+        guard socialStitchCommands.count == 2,
+              socialStitchCommands[0].joined(separator: " ").contains("-pass 1"),
+              socialStitchCommands[1].joined(separator: " ").contains("-pass 2"),
+              socialStitchCommands[1].contains(where: {
+                  $0.contains("scale=1080:1080") && $0.contains("crop=1080:1080")
+              }) else {
+            throw Failure("social stitch lost its delivery canvas or two-pass encode")
+        }
+        for command in socialStitchCommands { try FFmpeg.run(command) }
+        let socialStitchInfo = try Probe.probe(socialStitchOut)
+        guard socialStitchInfo.width == 1080, socialStitchInfo.height == 1080,
+              abs(socialStitchInfo.duration - 1) < 0.25 else {
+            throw Failure("social stitch output did not match its delivery preset")
+        }
+        print("social stitch ok: \(socialStitchInfo.width)×\(socialStitchInfo.height)")
 
         // Publishing journals preserve completed destinations and turn a
         // process-interrupted upload into an explicit retryable failure.

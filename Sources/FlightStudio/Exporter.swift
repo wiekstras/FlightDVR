@@ -270,9 +270,9 @@ enum ExportDiskSpace {
         switch settings.preset {
         case .remux:
             encodedBytes = Double(sourceBytes)
-        case .social where clips.count == 1:
+        case .social:
             encodedBytes = settings.socialTargetMB * 1_000_000
-        case .edit, .master, .social:
+        case .edit, .master:
             encodedBytes = clips.reduce(0) { total, clip in
                 guard let info = clip.info else { return total }
                 let duration = max(clip.edit.outputDuration(duration: info.duration), 0)
@@ -588,15 +588,15 @@ final class ExportQueue: ObservableObject {
         persist()
     }
 
-    /// Join the selected clips in their current list order into one H.264
-    /// sequence. Stitching deliberately re-encodes, so differing source codecs
-    /// are fine; matching dimensions are required for a clean timeline.
+    /// Join selected edits in their current order. Stitching deliberately
+    /// re-encodes, so differing source codecs are fine; matching dimensions are
+    /// required for a clean timeline and Remux falls back to Master H.264.
     func enqueueStitch(clips: [Clip], settings: ExportSettings) {
         guard clips.count > 1 else { return }
         let folder = settings.resolvedOutputFolder
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var stitchSettings = settings
-        if stitchSettings.preset == .remux || stitchSettings.preset == .social {
+        if stitchSettings.preset == .remux {
             stitchSettings.preset = .master
         }
         let out = OutputNamer.uniqueURL(in: folder, baseName: "Flight sequence",
@@ -798,16 +798,20 @@ final class ExportQueue: ObservableObject {
         let totalDuration = max(clips.reduce(0) {
             $0 + $1.edit.outputDuration(duration: $1.info?.duration ?? 0)
         }, 0.01)
-        let args = try StitchCommandBuilder.build(clips: clips, settings: job.settings,
-                                                  output: job.stagingURL, jobID: job.id)
-        _ = try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
-            try FFmpeg.run(args, onProgressSeconds: { seconds in
-                Task { @MainActor in
-                    cancel.progress = min(seconds / totalDuration, 1)
-                    self.schedulePersistence()
-                }
-            }, isCancelled: { cancel.cancelFlag })
-        }.value
+        let commands = try StitchCommandBuilder.build(clips: clips, settings: job.settings,
+                                                       output: job.stagingURL, jobID: job.id)
+        let passes = Double(commands.count)
+        for (index, args) in commands.enumerated() {
+            let passBase = Double(index) / passes
+            _ = try await Task.detached(priority: .userInitiated) { [cancel = job] () throws in
+                try FFmpeg.run(args, onProgressSeconds: { seconds in
+                    Task { @MainActor in
+                        cancel.progress = passBase + min(seconds / totalDuration, 1) / passes
+                        self.schedulePersistence()
+                    }
+                }, isCancelled: { cancel.cancelFlag })
+            }.value
+        }
     }
 
     private func schedulePersistence() {
@@ -915,7 +919,7 @@ enum ExportCommandBuilder {
 
         case .social:
             let outDur = max(effectivePlan.outputDuration(duration: info.duration), 0.01)
-            let audioKbps = wantAudio ? 128.0 : 0
+            let audioKbps = wantAudio ? 192.0 : 0
             let totalKbits = settings.socialTargetMB * 8_000
             let videoKbps = max(totalKbits / outDur - audioKbps, 100)
             let passLog = ClipStore.cacheRoot.appendingPathComponent("2pass-\(jobID.uuidString)").path
@@ -991,7 +995,7 @@ private enum TitleImageRenderer {
 /// and codecs may differ; frame dimensions must match.
 enum StitchCommandBuilder {
     static func build(clips: [ExportClipSnapshot], settings: ExportSettings,
-                      output: URL, jobID: UUID) throws -> [String] {
+                      output: URL, jobID: UUID) throws -> [[String]] {
         guard clips.count > 1 else {
             throw FFmpeg.ProcessError(command: "stitch", stderr: "Select at least two clips to stitch.")
         }
@@ -1055,6 +1059,13 @@ enum StitchCommandBuilder {
         } else {
             videoOut = "vcat"
         }
+        var deliveryVideoOut = videoOut
+        if settings.preset == .social {
+            graphLines.append("[\(videoOut)]\(settings.socialProfile.videoFilter(
+                framing: settings.socialFraming, positionX: settings.cropPositionX,
+                positionY: settings.cropPositionY))[vdelivery]")
+            deliveryVideoOut = "vdelivery"
+        }
         let wantsAudio = settings.keepAudio && graphs.contains { $0.audioLabel != nil }
         if wantsAudio {
             var audioInputs: [String] = []
@@ -1076,28 +1087,48 @@ enum StitchCommandBuilder {
             graphLines.append("\(audioInputs.joined())concat=n=\(clips.count):v=0:a=1[aout]")
         }
         args += ["-filter_complex", graphLines.filter { !$0.isEmpty }.joined(separator: ";"),
-                 "-map", "[\(videoOut)]"]
+                 "-map", "[\(deliveryVideoOut)]"]
         if wantsAudio {
             args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
         } else {
             args += ["-an"]
         }
         if settings.colorMode == .fixRange { args += ["-color_range", "tv"] }
+        let common = args
         switch settings.preset {
         case .edit:
-            args += ["-c:v", "prores_ks", "-profile:v", settings.proResProfile.ffmpegProfile,
-                     "-vendor", "apl0", "-pix_fmt", "yuv422p10le"]
-        case .master, .social, .remux:
+            var command = common
+            command += ["-c:v", "prores_ks", "-profile:v", settings.proResProfile.ffmpegProfile,
+                        "-vendor", "apl0", "-pix_fmt", "yuv422p10le", output.path]
+            return [command]
+        case .master, .remux:
+            var command = common
             if settings.useHardware {
-                args += ["-c:v", "h264_videotoolbox", "-q:v", "65"]
+                command += ["-c:v", "h264_videotoolbox", "-q:v", "65"]
             } else {
-                args += ["-c:v", "libx264", "-preset", "slow",
-                         "-crf", String(settings.masterQuality.crf)]
+                command += ["-c:v", "libx264", "-preset", "slow",
+                            "-crf", String(settings.masterQuality.crf)]
             }
-            args += ["-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+            command += ["-pix_fmt", "yuv420p", "-movflags", "+faststart", output.path]
+            return [command]
+        case .social:
+            let duration = max(clips.reduce(0) {
+                $0 + $1.edit.outputDuration(duration: $1.info?.duration ?? 0)
+            }, 0.01)
+            let audioKbps = wantsAudio ? 192.0 : 0
+            let videoKbps = max(settings.socialTargetMB * 8_000 / duration - audioKbps, 100)
+            let passLog = ClipStore.cacheRoot
+                .appendingPathComponent("2pass-\(jobID.uuidString)").path
+            var pass1 = common
+            pass1 += ["-c:v", "libx264", "-preset", "slow", "-b:v", "\(Int(videoKbps))k",
+                      "-pass", "1", "-passlogfile", passLog,
+                      "-pix_fmt", "yuv420p", "-f", "mp4", "/dev/null"]
+            var pass2 = common
+            pass2 += ["-c:v", "libx264", "-preset", "slow", "-b:v", "\(Int(videoKbps))k",
+                      "-pass", "2", "-passlogfile", passLog,
+                      "-pix_fmt", "yuv420p", "-movflags", "+faststart", output.path]
+            return [pass1, pass2]
         }
-        args.append(output.path)
-        return args
     }
 }
 

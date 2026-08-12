@@ -1032,6 +1032,13 @@ enum SelfTest {
         socialSettings.socialFraming = .fill
         socialSettings.cropPositionX = 0.25
         socialSettings.cropPositionY = 0.75
+        guard SocialFramingMath.draggedPosition(start: 0.5, translation: 25, overflow: 100) == 0.25,
+              SocialFramingMath.draggedPosition(start: 0.5, translation: -100, overflow: 100) == 1,
+              SocialFramingMath.draggedPosition(start: 0.5, translation: 100, overflow: 100) == 0,
+              SocialFramingMath.draggedPosition(start: 0.3, translation: 20, overflow: 0) == 0.3,
+              SocialFramingMath.draggedPosition(start: .nan, translation: 20, overflow: 0) == 0.5 else {
+            throw Failure("social framing drag did not map preview movement to bounded crop positions")
+        }
         let fillCommands = ExportCommandBuilder.build(
             plan: plan, settings: socialSettings, info: info,
             source: src, output: socialOut, jobID: UUID())

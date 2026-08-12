@@ -60,10 +60,13 @@ struct ExportPane: View {
                             image: store.selectedClip?.thumbnail,
                             profile: settings.socialProfile,
                             framing: settings.socialFraming,
-                            positionX: settings.cropPositionX,
-                            positionY: settings.cropPositionY)
+                            positionX: $settings.cropPositionX,
+                            positionY: $settings.cropPositionY)
                             .frame(maxWidth: .infinity)
                         if settings.socialFraming == .fill {
+                            Text("Drag the preview to reposition · Double-click to center")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                             LabeledContent("Horizontal") {
                                 Slider(value: $settings.cropPositionX, in: 0...1)
                             }
@@ -343,8 +346,14 @@ private struct SocialFramingPreview: View {
     let image: NSImage?
     let profile: SocialProfile
     let framing: SocialFraming
-    let positionX: Double
-    let positionY: Double
+    @Binding var positionX: Double
+    @Binding var positionY: Double
+    @State private var dragOrigin: DragOrigin?
+
+    private struct DragOrigin {
+        let x: Double
+        let y: Double
+    }
 
     private var canvasSize: CGSize {
         let aspect = CGFloat(profile.canvasSize.width) / CGFloat(profile.canvasSize.height)
@@ -382,6 +391,23 @@ private struct SocialFramingPreview: View {
                     .frame(width: renderedWidth, height: renderedHeight)
                     .offset(x: overflowX * (0.5 - positionX),
                             y: overflowY * (0.5 - positionY))
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                guard framing == .fill else { return }
+                                let origin = dragOrigin ?? DragOrigin(x: positionX, y: positionY)
+                                if dragOrigin == nil { dragOrigin = origin }
+                                positionX = SocialFramingMath.draggedPosition(
+                                    start: origin.x,
+                                    translation: Double(value.translation.width),
+                                    overflow: Double(overflowX))
+                                positionY = SocialFramingMath.draggedPosition(
+                                    start: origin.y,
+                                    translation: Double(value.translation.height),
+                                    overflow: Double(overflowY))
+                            }
+                            .onEnded { _ in dragOrigin = nil })
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(.secondary)
@@ -397,7 +423,24 @@ private struct SocialFramingPreview: View {
                 .background(.black.opacity(0.65))
                 .foregroundStyle(.white)
         }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            guard framing == .fill else { return }
+            positionX = 0.5
+            positionY = 0.5
+        }
         .accessibilityLabel("Social framing preview")
+        .accessibilityHint(framing == .fill
+            ? "Drag to reposition the video. Double-click to center it."
+            : "Shows how the video fits the selected social canvas.")
+    }
+}
+
+enum SocialFramingMath {
+    static func draggedPosition(start: Double, translation: Double, overflow: Double) -> Double {
+        let safeStart = start.isFinite ? min(max(start, 0), 1) : 0.5
+        guard translation.isFinite, overflow.isFinite, overflow > 0.001 else { return safeStart }
+        return min(max(safeStart - translation / overflow, 0), 1)
     }
 }
 

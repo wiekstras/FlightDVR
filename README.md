@@ -80,7 +80,8 @@ it, and add eased speed ramps.
 - **Deliver** — Social exports can target TikTok, Instagram Reels, YouTube
   Shorts (9:16), Instagram posts (1:1 or 4:5), or YouTube (16:9). Choose **Fit**
   to preserve the entire FPV frame or **Fill** for an edge-to-edge social crop,
-  then reposition the footage visually in the live framing preview.
+  then drag the footage directly in the live framing preview (or use precise
+  sliders and double-click to recenter it).
 - **Publish queue foundation** — validated multi-platform jobs are journaled to
   disk. Completed destinations survive relaunches, while interrupted uploads
   return as explicit retryable failures instead of disappearing. One Publish

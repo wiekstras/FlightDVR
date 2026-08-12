@@ -690,10 +690,11 @@ final class ClipStore: ObservableObject {
                             MediaMetadataCache.shared.store(
                                 info, for: Self.mediaCacheKey(for: clip.url))
                         }
-                        let thumb = Self.extractThumbnail(for: clip.url, duration: info?.duration ?? 0)
+                        let thumbnailURL = Self.extractThumbnailURL(
+                            for: clip.url, duration: info?.duration ?? 0)
                         await MainActor.run {
                             clip.info = info
-                            clip.thumbnail = thumb
+                            clip.thumbnail = thumbnailURL.flatMap(NSImage.init(contentsOf:))
                         }
                     }
                     return true
@@ -799,7 +800,8 @@ final class ClipStore: ObservableObject {
 
     // MARK: Thumbnails
 
-    nonisolated private static func extractThumbnail(for url: URL, duration: Double) -> NSImage? {
+    nonisolated private static func extractThumbnailURL(for url: URL,
+                                                        duration: Double) -> URL? {
         let out = cacheRoot.appendingPathComponent("thumb-\(mediaCacheKey(for: url)).jpg")
         if !FileManager.default.fileExists(atPath: out.path) {
             // Seek a third of the way in (past the bench-sitting), then decode a couple of
@@ -814,7 +816,7 @@ final class ClipStore: ObservableObject {
                 out.path,
             ])
         }
-        return NSImage(contentsOf: out)
+        return FileManager.default.fileExists(atPath: out.path) ? out : nil
     }
 
     /// Lazily build a visual timeline only for clips the user opens. A library

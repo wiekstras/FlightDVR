@@ -244,7 +244,7 @@ struct PublishPane: View {
         thumbnailError = nil
         Task {
             do {
-                try await Task.detached(priority: .userInitiated) {
+                _ = try await Task.detached(priority: .userInitiated) {
                     try FFmpeg.run(command)
                 }.value
                 draft.thumbnailURL = output

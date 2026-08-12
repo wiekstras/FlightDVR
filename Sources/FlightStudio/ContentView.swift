@@ -324,8 +324,7 @@ struct ClipRow: View {
                 HStack(spacing: 4) {
                     ForEach(clip.tags, id: \.self) { tag in
                         Button {
-                            clip.removeTag(tag)
-                            store.objectWillChange.send()
+                            store.removeTag(tag, from: clip)
                         } label: {
                             Text(tag)
                                 .font(.caption2)
@@ -341,9 +340,8 @@ struct ClipRow: View {
                         .font(.caption2)
                         .frame(width: 72)
                         .onSubmit {
-                            clip.addTag(newTag)
+                            store.addTag(newTag, to: clip)
                             newTag = ""
-                            store.objectWillChange.send()
                         }
                 }
             }

@@ -20,7 +20,9 @@ it, and add eased speed ramps.
   metadata is cached across launches and invalidates automatically when a file
   moves, changes size, or is modified. Favorites, tags and edit drafts update an
   in-memory index immediately while whole-library serialization is batched on a
-  utility queue and flushed at macOS lifecycle boundaries.
+  utility queue and flushed at macOS lifecycle boundaries. Sorted, filtered and
+  day-grouped presentation state is cached and invalidated explicitly, avoiding
+  repeated full-library sorting during unrelated SwiftUI updates.
 - **Manage** — move clips to the Trash (always recoverable, never hard-deleted)
   from the right-click menu, the Delete key, or Clips → Move Ticked to Trash.
 - **Preview natively** — `.ts` files are losslessly remuxed into a cache with the

@@ -437,29 +437,10 @@ enum MediaCacheFiles {
     }
 }
 
-@MainActor
-final class ClipStore: ObservableObject {
-    private static let lastFolderDefaultsKey = "lastSourceFolder"
-    @Published var sourceFolder: URL?
-    @Published var clips: [Clip] = []
-    @Published var selectedClip: Clip?
-    @Published var isScanning = false
-    @Published var statusMessage = ""
-    @Published var ffmpegMissing = !FFmpeg.isAvailable
-    @Published var sortOrder: SortOrder = .date
-    @Published var reverseSort = false
-    @Published var searchQuery = ""
-    @Published var favoritesOnly = false
-    @Published var tagFilter = ""
-    @Published var previewCacheBytes: Int64 = 0
-    @Published var projectOpenError: String?
-    private var filmstripTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
-    private var waveformTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
-    private var pendingProjectOpen: (data: Data, sourceURL: URL)?
-    private var activeScanID: UUID?
-
-    /// Clips in the chosen order. Date order = newest flight first.
-    var sortedClips: [Clip] {
+enum LibraryPresentation {
+    static func sorted(clips: [Clip], sortOrder: SortOrder, reverse: Bool,
+                       searchQuery: String, favoritesOnly: Bool,
+                       tagFilter: String) -> [Clip] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         let matched = query.isEmpty ? clips : clips.filter {
             $0.relativeName.localizedCaseInsensitiveContains(query)
@@ -474,20 +455,61 @@ final class ClipStore: ObservableObject {
         case .date:
             ordered = searchable.sorted { ($0.flightDate, $0.name) > ($1.flightDate, $1.name) }
         case .name:
-            ordered = searchable.sorted { $0.relativeName.localizedStandardCompare($1.relativeName) == .orderedAscending }
+            ordered = searchable.sorted {
+                $0.relativeName.localizedStandardCompare($1.relativeName) == .orderedAscending
+            }
         case .duration:
             ordered = searchable.sorted { ($0.info?.duration ?? 0) > ($1.info?.duration ?? 0) }
         case .size:
             ordered = searchable.sorted { ($0.info?.fileSize ?? 0) > ($1.info?.fileSize ?? 0) }
         }
-        return reverseSort ? Array(ordered.reversed()) : ordered
+        return reverse ? Array(ordered.reversed()) : ordered
     }
 
-    /// Clips grouped into one section per flying day (date order only).
-    var daySections: [(day: Date, clips: [Clip])] {
-        let grouped = Dictionary(grouping: sortedClips, by: \.flightDay)
-        return grouped.keys.sorted { reverseSort ? $0 < $1 : $0 > $1 }
-            .map { ($0, grouped[$0]!) }
+    static func sections(from clips: [Clip], reverse: Bool) -> [(day: Date, clips: [Clip])] {
+        let grouped = Dictionary(grouping: clips, by: \.flightDay)
+        return grouped.keys.sorted { reverse ? $0 < $1 : $0 > $1 }
+            .map { ($0, grouped[$0] ?? []) }
+    }
+}
+
+@MainActor
+final class ClipStore: ObservableObject {
+    private static let lastFolderDefaultsKey = "lastSourceFolder"
+    @Published var sourceFolder: URL?
+    @Published var clips: [Clip] = [] { didSet { rebuildPresentation() } }
+    @Published var selectedClip: Clip?
+    @Published var isScanning = false
+    @Published var statusMessage = ""
+    @Published var ffmpegMissing = !FFmpeg.isAvailable
+    @Published var sortOrder: SortOrder = .date { didSet { rebuildPresentation() } }
+    @Published var reverseSort = false { didSet { rebuildPresentation() } }
+    @Published var searchQuery = "" { didSet { schedulePresentationRefresh() } }
+    @Published var favoritesOnly = false { didSet { rebuildPresentation() } }
+    @Published var tagFilter = "" { didSet { schedulePresentationRefresh() } }
+    @Published private(set) var sortedClips: [Clip] = []
+    @Published private(set) var daySections: [(day: Date, clips: [Clip])] = []
+    @Published var previewCacheBytes: Int64 = 0
+    @Published var projectOpenError: String?
+    private var filmstripTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var waveformTasks: [URL: (id: UUID, task: Task<Void, Never>)] = [:]
+    private var pendingProjectOpen: (data: Data, sourceURL: URL)?
+    private var activeScanID: UUID?
+    private var presentationWorkItem: DispatchWorkItem?
+
+    private func rebuildPresentation() {
+        presentationWorkItem?.cancel()
+        sortedClips = LibraryPresentation.sorted(
+            clips: clips, sortOrder: sortOrder, reverse: reverseSort,
+            searchQuery: searchQuery, favoritesOnly: favoritesOnly, tagFilter: tagFilter)
+        daySections = LibraryPresentation.sections(from: sortedClips, reverse: reverseSort)
+    }
+
+    private func schedulePresentationRefresh() {
+        presentationWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.rebuildPresentation() }
+        presentationWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: item)
     }
 
     nonisolated static let cacheRoot: URL = {
@@ -723,7 +745,7 @@ final class ClipStore: ObservableObject {
             .map { (clip: $0, cachedInfo: $0.info) }
         guard !pending.isEmpty else { return }
         let needsCacheFlush = pending.contains { $0.cachedInfo == nil }
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .utility) { [weak self] in
             await withTaskGroup(of: Void.self) { group in
                 var iterator = pending.makeIterator()
                 func addNext(_ group: inout TaskGroup<Void>) -> Bool {
@@ -740,6 +762,7 @@ final class ClipStore: ObservableObject {
                         await MainActor.run {
                             clip.info = info
                             clip.thumbnail = thumbnailURL.flatMap(NSImage.init(contentsOf:))
+                            self?.schedulePresentationRefresh()
                         }
                     }
                     return true
@@ -1027,7 +1050,17 @@ final class ClipStore: ObservableObject {
 
     func toggleFavorite(_ clip: Clip) {
         clip.favorite.toggle()
-        objectWillChange.send()
+        rebuildPresentation()
+    }
+
+    func addTag(_ tag: String, to clip: Clip) {
+        clip.addTag(tag)
+        rebuildPresentation()
+    }
+
+    func removeTag(_ tag: String, from clip: Clip) {
+        clip.removeTag(tag)
+        rebuildPresentation()
     }
 
     var tickedClips: [Clip] { clips.filter(\.ticked) }

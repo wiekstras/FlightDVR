@@ -330,6 +330,48 @@ enum SelfTest {
         }
         print("library metadata index ok")
 
+        // Library presentation is derived once per invalidation rather than on
+        // every SwiftUI body read. Exercise realistic collection size and all
+        // filters independently of filesystem scanning.
+        let libraryBaseDate = Date(timeIntervalSince1970: 1_750_000_000)
+        let largeLibrary = (0..<10_000).map { index -> Clip in
+            let date = Calendar.current.date(
+                byAdding: .day, value: -(index % 10), to: libraryBaseDate)!
+            let clip = Clip(url: workDir.appendingPathComponent("library-\(index).ts"),
+                            fileDate: date, isLibraryBacked: false)
+            clip.relativeName = String(format: "clip-%05d.ts", 9_999 - index)
+            clip.info = ClipInfo(duration: Double(index), width: 1_920, height: 1_080,
+                                 fps: 60, videoCodec: "h264", hasAudio: true,
+                                 colorRange: "tv", fileSize: Int64(index) * 1_000)
+            clip.favorite = index.isMultiple(of: 100)
+            if index.isMultiple(of: 500) { clip.tags = ["keeper"] }
+            return clip
+        }
+        let durationSorted = LibraryPresentation.sorted(
+            clips: largeLibrary, sortOrder: .duration, reverse: false,
+            searchQuery: "", favoritesOnly: false, tagFilter: "")
+        let favorites = LibraryPresentation.sorted(
+            clips: largeLibrary, sortOrder: .name, reverse: false,
+            searchQuery: "", favoritesOnly: true, tagFilter: "")
+        let tagged = LibraryPresentation.sorted(
+            clips: largeLibrary, sortOrder: .date, reverse: false,
+            searchQuery: "", favoritesOnly: false, tagFilter: "KEEP")
+        let searched = LibraryPresentation.sorted(
+            clips: largeLibrary, sortOrder: .name, reverse: false,
+            searchQuery: "clip-00042", favoritesOnly: false, tagFilter: "")
+        let sections = LibraryPresentation.sections(
+            from: LibraryPresentation.sorted(
+                clips: largeLibrary, sortOrder: .date, reverse: false,
+                searchQuery: "", favoritesOnly: false, tagFilter: ""),
+            reverse: false)
+        guard durationSorted.first?.info?.duration == 9_999,
+              favorites.count == 100, tagged.count == 20,
+              searched.count == 1, searched[0].relativeName == "clip-00042.ts",
+              sections.count == 10, sections.reduce(0, { $0 + $1.clips.count }) == 10_000 else {
+            throw Failure("large-library presentation lost ordering, filters, or day groups")
+        }
+        print("large-library presentation ok")
+
         // 3c. Invalid timeline data is normalised before it can reach ffmpeg.
         var messy = EditPlan(inPoint: -2, outPoint: 99,
                              cuts: [CutRange(start: 2, end: 4), CutRange(start: 3, end: 6),
